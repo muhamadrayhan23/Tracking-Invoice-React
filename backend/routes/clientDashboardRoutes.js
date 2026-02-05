@@ -16,7 +16,15 @@ router.get("/:id", async (req, res) => {
         );
 
         if (!client) {
-            return res.status(404).json({ message: "Client tidak ditemukan" });
+            // Return empty data if no client record found
+            return res.json({
+                quotations: [],
+                invoices: [],
+                paymentStatus: [],
+                overdueInvoices: [],
+                quotationSummary: [],
+                invoiceSummary: []
+            });
         }
 
         const clientId = client.id;
@@ -26,19 +34,20 @@ router.get("/:id", async (req, res) => {
         ============================== */
         const [quotations] = await db.query(`
             SELECT
-                id,
-                project_title,
-                estimate_date,
-                expiry_date,
-                subtotal,
-                discount,
-                tax,
-                total,
-                status,
-                created_at
-            FROM quotation
-            WHERE client_id = ? AND status != 'draft'
-            ORDER BY created_at DESC
+                q.id,
+                p.project_title,
+                q.estimate_date,
+                q.expiry_date,
+                q.subtotal,
+                q.discount,
+                q.tax,
+                q.total,
+                q.status,
+                q.created_at
+            FROM quotation q
+            LEFT JOIN project p ON q.project_id = p.id
+            WHERE q.client_id = ? AND q.status != 'draft'
+            ORDER BY q.created_at DESC
         `, [clientId]);
 
         /* =============================
@@ -55,35 +64,53 @@ router.get("/:id", async (req, res) => {
                 i.tax,
                 i.total,
                 i.status,
-                q.project_title
+                p.project_title
             FROM invoice i
             LEFT JOIN quotation q ON i.quotation_id = q.id
+            LEFT JOIN project p ON q.project_id = p.id
             WHERE i.client_id = ? AND i.status != 'Draft'
             ORDER BY i.created_at DESC
         `, [clientId]);
 
         /* =============================
-           PAYMENT STATUS (TERMS)
+           PAYMENT STATUS (TERMS) - FROM PAYMENT HISTORY
         ============================== */
         const [paymentStatus] = await db.query(`
-            SELECT 
-                i.invoice_number,
-                it.term_number,
-                it.nominal,
-                it.term_status,
-                it.term_estimate,
-                it.payment_date
-            FROM invoice_terms it
-            JOIN invoice i ON it.invoice_id = i.id
-            WHERE i.client_id = ?
-            ORDER BY i.id, it.term_number
+    SELECT DISTINCT
+        p.id,
+        i.invoice_number,
+        qt.term_number,
+        p.amount_paid AS nominal,
+        p.payment_status,
+        p.payment_date
+    FROM payment p
+    JOIN invoice i ON p.invoice_id = i.id
+    
+    LEFT JOIN quotation_terms qt ON i.quotation_term_id = qt.id 
+    WHERE i.client_id = ?
+    ORDER BY p.payment_date DESC
+    LIMIT 3
+`, [clientId]);
+
+        /* =============================
+           QUOTATION SUMMARY
+        ============================== */
+        const [quotationSummary] = await db.query(`
+            SELECT status, COUNT(*) as count FROM quotation WHERE client_id = ? AND status != 'Draft' GROUP BY status
+        `, [clientId]);
+
+        /* =============================
+           INVOICE SUMMARY
+        ============================== */
+        const [invoiceSummary] = await db.query(`
+            SELECT status, COUNT(*) as count FROM invoice WHERE client_id = ? AND status != 'Draft' GROUP BY status
         `, [clientId]);
 
         /* =============================
            OVERDUE INVOICES
         ============================== */
         const [overdueInvoices] = await db.query(`
-            SELECT 
+            SELECT
                 invoice_number,
                 total,
                 due_date
@@ -96,7 +123,9 @@ router.get("/:id", async (req, res) => {
             quotations,
             invoices,
             paymentStatus,
-            overdueInvoices
+            overdueInvoices,
+            quotationSummary,
+            invoiceSummary
         });
 
     } catch (err) {

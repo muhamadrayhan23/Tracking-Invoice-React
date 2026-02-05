@@ -1,36 +1,52 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { useNavigate } from "react-router";
-import { Trash2, Plus } from "lucide-react";
+import { Trash2, Plus, ChevronDown, X, CheckCircle } from "lucide-react";
+import SlateEditor from "../../components/SlateEditor";
 import QuotationLayout from "../../components/layout/Quotation-Layout";
+import { getMe } from "../../services/authService";
 
 const AddQuotation = () => {
     const navigate = useNavigate();
 
-    //    Master Data
+
+
+    //  Master Data
     const [clients, setClients] = useState([]);
     const [itemsMaster, setItemsMaster] = useState([]);
-    const [taxes, setTaxes] = useState([]);
+    const [projects, setProjects] = useState([]);
+
+    // Alert states
+    const [showAddedModal, setShowAddedModal] = useState(false);
+    const [showSentModal, setShowSentModal] = useState(false);
+    const [showLessThanModal, setShowLessThanModal] = useState(false);
+    const [showMoreThanModal, setShowMoreThanModal] = useState(false);
+    const [showNoProjectModal, setShowNoProjectModal] = useState(false);
 
     // Form State
     const [form, setForm] = useState({
+        quotation_number: "",
         client_id: "",
+        project_id: "",
         estimate_date: "",
         expiry_date: "",
         project_title: "",
-        start_date: "",
-        deadline: "",
+        // start_date: "",
+        // deadline: "",
+        term_condition: "",
         discount: 0,
-        discount_type: "percent", // percent | nominal
+        discount_type: "percent",
+        tax: 0,
+        tax_type: "percent",
     });
 
     const [quotationItems, setQuotationItems] = useState([
         {
             item_id: "",
+            item_name: "",
             description: "",
+            unit: "",
             qty: 1,
             price: 0,
-            tax_id: "",
-            tax_rate: 0,
         },
     ]);
 
@@ -43,33 +59,35 @@ const AddQuotation = () => {
         },
     ]);
 
+    // Search and dropdown states
+    const [searchTermClient, setSearchTermClient] = useState("");
+    const [showDropdownClient, setShowDropdownClient] = useState(false);
+    const [searchTermProject, setSearchTermProject] = useState("");
+    const [showDropdownProject, setShowDropdownProject] = useState(false);
+    const [searchTermItems, setSearchTermItems] = useState([]);
+    const [showDropdownItems, setShowDropdownItems] = useState([]);
+
     // Fecth Master Data
     useEffect(() => {
         const fetchData = async () => {
             try {
-                const [clientsRes, itemsRes, taxesRes] = await Promise.all([
+                const [clientsRes, itemsRes, projectsRes] = await Promise.all([
                     fetch("http://localhost:3000/api/clients"),
                     fetch("http://localhost:3000/api/items"),
-                    fetch("http://localhost:3000/api/taxes")
+                    fetch("http://localhost:3000/api/projects")
                 ]);
 
                 if (!clientsRes.ok) throw new Error("Failed to fetch clients");
                 if (!itemsRes.ok) throw new Error("Failed to fetch items");
-                if (!taxesRes.ok) throw new Error("Failed to fetch taxes");
+                if (!projectsRes.ok) throw new Error("Failed to fetch projects");
 
                 const clientsData = await clientsRes.json();
                 const itemsData = await itemsRes.json();
-                const taxesData = await taxesRes.json();
+                const projectsData = await projectsRes.json();
 
                 setClients(clientsData);
                 setItemsMaster(itemsData);
-                // Normalize taxes data
-                const normalizedTaxes = taxesData.map(t => ({
-                    id: t.id,
-                    name: t.tax_name,
-                    rate: Number(t.tax_percentage)
-                }));
-                setTaxes(normalizedTaxes);
+                setProjects(projectsData);
             } catch (error) {
                 console.error("Error fetching master data:", error);
             }
@@ -78,17 +96,200 @@ const AddQuotation = () => {
         fetchData();
     }, []);
 
+    // Filtered lists for dropdowns
+    const filteredClients = clients.filter(client =>
+        client.company_name.toLowerCase().includes(searchTermClient.toLowerCase())
+    );
+
+    const filteredProjects = projects.filter(project =>
+        project.project_title.toLowerCase().includes(searchTermProject.toLowerCase()) &&
+        (!form.client_id || project.client_id === Number(form.client_id))
+    );
+
+    const filteredItems = (index) => itemsMaster.filter(item =>
+        item.item_name.toLowerCase().includes((searchTermItems[index] || "").toLowerCase())
+    );
+
+    // Handlers for search and selection
+    const handleSearchClientChange = (e) => {
+        const value = e.target.value;
+        setSearchTermClient(value);
+        setShowDropdownClient(true);
+
+        // Check if the typed value exactly matches a client's company_name
+        const matchingClient = clients.find(client => client.company_name.toLowerCase() === value.toLowerCase());
+        if (matchingClient) {
+            setForm(prev => ({ ...prev, client_id: matchingClient.id, project_id: "" }));
+            setSearchTermProject(""); // Reset project search when client changes
+        } else {
+            setForm(prev => ({ ...prev, client_id: "", project_id: "" }));
+        }
+    };
+
+    const handleClientSelect = (client) => {
+        setForm(prev => ({ ...prev, client_id: client.id, project_id: "" }));
+        setSearchTermClient(client.company_name);
+        setShowDropdownClient(false);
+        setSearchTermProject(""); // Reset project search
+    };
+
+    const handleProjectFocus = () => {
+        if (form.client_id) {
+            const clientProjects = projects.filter(project => project.client_id === Number(form.client_id));
+            if (clientProjects.length === 0) {
+                setShowNoProjectModal(true);
+            }
+        }
+    };
+
+    const handleSearchProjectChange = (e) => {
+        const value = e.target.value;
+        setSearchTermProject(value);
+        setShowDropdownProject(true);
+
+        // Check if the typed value exactly matches a project's title
+        const matchingProject = projects.find(project => project.project_title.toLowerCase() === value.toLowerCase());
+        if (matchingProject) {
+            setForm(prev => ({
+                ...prev,
+                project_id: matchingProject.id,
+                project_title: matchingProject.project_title,
+                start_date: matchingProject.start_date.split("T")[0],
+                deadline: matchingProject.end_date.split("T")[0],
+                estimate_date: matchingProject.start_date.split("T")[0],
+                expiry_date: matchingProject.end_date.split("T")[0],
+                client_id: matchingProject.client_id
+            }));
+            // Also set client search term
+            const client = clients.find(c => c.id === matchingProject.client_id);
+            if (client) {
+                setSearchTermClient(client.company_name);
+            }
+        } else {
+            setForm(prev => ({ ...prev, project_id: "", project_title: value }));
+        }
+    };
+
+    const handleProjectSelect = (project) => {
+        setForm(prev => ({
+            ...prev,
+            project_id: project.id,
+            project_title: project.project_title,
+            start_date: project.start_date.split("T")[0],
+            deadline: project.end_date.split("T")[0],
+            client_id: project.client_id
+        }));
+        setSearchTermProject(project.project_title);
+        setShowDropdownProject(false);
+        // Also set client search term
+        const client = clients.find(c => c.id === project.client_id);
+        if (client) {
+            setSearchTermClient(client.company_name);
+        }
+    };
+
+    const handleSearchItemChange = (index, e) => {
+        const value = e.target.value;
+        setSearchTermItems(prev => {
+            const updated = [...prev];
+            updated[index] = value;
+            return updated;
+        });
+        setShowDropdownItems(prev => {
+            const updated = [...prev];
+            updated[index] = true;
+            return updated;
+        });
+
+        // Check if the typed value exactly matches an item's name
+        const matchingItem = itemsMaster.find(item => item.item_name.toLowerCase() === value.toLowerCase());
+        if (matchingItem) {
+            setQuotationItems(prev => {
+                const updated = [...prev];
+                updated[index].item_id = matchingItem.id;
+                updated[index].item_name = matchingItem.item_name;
+                updated[index].description = matchingItem.description || "";
+                updated[index].unit = matchingItem.unit || "";
+                updated[index].price = matchingItem.default_price || 0;
+                return updated;
+            });
+        } else {
+            setQuotationItems(prev => {
+                const updated = [...prev];
+                updated[index].item_id = "";
+                updated[index].item_name = value;
+                return updated;
+            });
+        }
+    };
+
+    const handleItemSelect = (index, item) => {
+        setQuotationItems(prev => {
+            const updated = [...prev];
+            updated[index].item_id = item.id;
+            updated[index].item_name = item.item_name;
+            updated[index].description = item.description || "";
+            updated[index].unit = item.unit || "";
+            updated[index].price = item.default_price || 0;
+            return updated;
+        });
+        setSearchTermItems(prev => {
+            const updated = [...prev];
+            updated[index] = item.item_name;
+            return updated;
+        });
+        setShowDropdownItems(prev => {
+            const updated = [...prev];
+            updated[index] = false;
+            return updated;
+        });
+    };
+
+    // No auto-population of project when client is selected
+
+    // Calculate totals
+    const subtotal = useMemo(() => quotationItems.reduce(
+        (sum, i) => sum + i.qty * i.price,
+        0
+    ), [quotationItems]);
+
+    const discountValue = useMemo(() =>
+        form.discount_type === "percent"
+            ? (subtotal * Number(form.discount)) / 100
+            : Number(form.discount),
+        [subtotal, form.discount, form.discount_type]
+    );
+
+    const taxValue = useMemo(() => {
+        const dpp = subtotal - discountValue;
+        return form.tax_type === "percent"
+            ? (dpp * Number(form.tax)) / 100
+            : Number(form.tax);
+    }, [subtotal, discountValue, form.tax, form.tax_type]);
+
+    const total = useMemo(() => subtotal - discountValue + taxValue, [subtotal, discountValue, taxValue]);
+
+    // Recalculate nominals when total changes
+    useEffect(() => {
+        setQuotationTerms(prev => prev.map(term => ({
+            ...term,
+            nominal: (total * term.term_percentage) / 100
+        })));
+    }, [total]);
+
+
+
     // Item Handler
     const addLine = () => {
         setQuotationItems(prev => [
             ...prev,
             {
                 item_id: "",
+                item_name: "",
                 description: "",
+                unit: "",
                 qty: 1,
-                price: 0,
-                tax_id: "",
-                tax_rate: 0,
+                price: 0
             },
         ]);
     };
@@ -97,20 +298,6 @@ const AddQuotation = () => {
         setQuotationItems(prev => prev.filter((_, i) => i !== index));
     };
 
-    const updateItem = (index, field, value) => {
-        setQuotationItems(prev => {
-            const updated = [...prev];
-            updated[index][field] = value;
-
-            // Auto-fill tax rate when tax_id is selected
-            if (field === "tax_id") {
-                const selectedTax = taxes.find(t => t.id === Number(value));
-                updated[index].tax_rate = selectedTax ? Number(selectedTax.rate) : 0;
-            }
-
-            return updated;
-        });
-    };
 
     // Handling Selected Item
     const handleSelectItem = (index, itemId) => {
@@ -120,9 +307,19 @@ const AddQuotation = () => {
             const updated = [...prev];
 
             updated[index].item_id = itemId;
+            updated[index].item_name = selectedItem?.item_name || "";
             updated[index].description = selectedItem?.description || "";
+            updated[index].unit = selectedItem?.unit || "";
             updated[index].price = selectedItem?.default_price || 0;
 
+            return updated;
+        });
+    };
+
+    const updateItem = (index, field, value) => {
+        setQuotationItems(prev => {
+            const updated = [...prev];
+            updated[index][field] = value;
             return updated;
         });
     };
@@ -149,55 +346,49 @@ const AddQuotation = () => {
         setQuotationTerms(prev => {
             const updated = [...prev];
             updated[index][field] = value;
+            if (field === "term_percentage") {
+                updated[index].nominal = (total * value) / 100;
+            }
             return updated;
         });
     };
 
-
-    const subtotal = quotationItems.reduce(
-        (sum, i) => sum + i.qty * i.price,
-        0
-    );
-
-    const taxBreakdown = quotationItems.reduce((acc, item) => {
-        const taxId = item.tax_id;
-        const taxAmount = (item.qty * item.price * item.tax_rate) / 100;
-        if (taxId) {
-            if (!acc[taxId]) {
-                const tax = taxes.find(t => t.id == taxId);
-                acc[taxId] = { name: tax?.name || 'Unknown', rate: tax?.rate || 0, amount: 0 };
-            }
-            acc[taxId].amount += taxAmount;
-        }
-        return acc;
-    }, {});
-
-    const taxTotal = Object.values(taxBreakdown).reduce((sum, tax) => sum + tax.amount, 0);
-
-    const discountValue =
-        form.discount_type === "percent"
-            ? (subtotal * form.discount) / 100
-            : Number(form.discount);
-
-    const total = subtotal - discountValue + taxTotal;
-
     // Submit Handler
     const submit = async (status) => {
-        // Validation 
-        if (!form.client_id || !form.estimate_date || !form.expiry_date || !form.project_title || !form.start_date || !form.deadline) {
+        // Validation
+        if (!form.client_id || !form.estimate_date || !form.project_title || !form.expiry_date) {
             alert("Data quotation wajib diisi!");
             return;
         }
 
+        const totalPercentage = quotationTerms.reduce((sum, term) => sum + term.term_percentage, 0);
+        if (totalPercentage < 100) {
+            setShowLessThanModal(true);
+            return;
+        } else if (totalPercentage > 100) {
+            setShowMoreThanModal(true);
+            return;
+        }
+
+        // Fix quotation_number if it's JSON (likely copied from term_condition)
+        let fixedForm = { ...form };
+        if (fixedForm.quotation_number && (fixedForm.quotation_number.startsWith('[') || fixedForm.quotation_number.startsWith('{'))) {
+            fixedForm.quotation_number = "";
+        }
+
+        // Get current user for created_by
+        const currentUser = getMe();
+
         const payload = {
-            ...form,
+            ...fixedForm,
             status,
             subtotal,
             discount: discountValue,
-            tax: taxTotal,
+            tax: taxValue,
             total,
             items: quotationItems,
             terms: quotationTerms,
+            created_by: currentUser.id,
         };
 
         try {
@@ -207,376 +398,708 @@ const AddQuotation = () => {
                 body: JSON.stringify(payload),
             });
 
-            alert("Quotation berhasil ditambahkan!");
-
             if (!response.ok) {
                 const errorData = await response.json();
                 throw new Error(errorData.message || "Failed to save quotation");
             }
 
-            navigate("/quotations");
+            if (status === "Draft") {
+                setShowAddedModal(true);
+            } else {
+                setShowSentModal(true);
+            }
         } catch (error) {
             console.error("Error saving quotation:", error);
             alert("Error saving quotation: " + error.message);
         }
     };
 
+    // Handle modal close
+    const handleCloseAddedModal = () => {
+        setShowAddedModal(false);
+        navigate("/quotations");
+    };
+
+    const handleCloseSentModal = () => {
+        setShowSentModal(false);
+        navigate("/quotations");
+    };
+
+    // Keyboard event for modals
+    useEffect(() => {
+        const handleKeyDown = (e) => {
+            if (showAddedModal || showSentModal || showLessThanModal || showMoreThanModal || showNoProjectModal) {
+                if (e.key === 'Enter' || e.key === 'Escape') {
+                    e.preventDefault();
+                    if (showAddedModal) {
+                        handleCloseAddedModal();
+                    } else if (showSentModal) {
+                        handleCloseSentModal();
+                    } else if (showLessThanModal) {
+                        setShowLessThanModal(false);
+                    } else if (showMoreThanModal) {
+                        setShowMoreThanModal(false);
+                    } else if (showNoProjectModal) {
+                        setShowNoProjectModal(false);
+                    }
+                }
+            }
+        };
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [showAddedModal, showSentModal, showLessThanModal, showMoreThanModal, showNoProjectModal]);
+
     return (
         <QuotationLayout>
-            <div className="p-6 bg-white rounded-lg space-y-6">
+            <div className="p-6 ">
 
                 {/* HEADER */}
-                <h1 className="text-xl font-semibold">Create New Quotation</h1>
+                <h1 className="text-xl font-semibold mb-6">Create New Quotation</h1>
 
-                {/* CLIENT */}
-                <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-end">
-                    <div className="flex-1 w-full">
-                        <label className="block mb-1 text-sm font-medium">Client <span className="text-red-500">*</span></label>
-                        <select
-                            value={form.client_id}
-                            onChange={e => setForm({ ...form, client_id: e.target.value })}
-                            className="w-full border border-gray-200 rounded px-3 py-2"
-                        >
-                            <option value="" className="border border-gray-200">Select Client</option>
-                            {clients.map(c => (
-                                <option key={c.id} value={c.id}>{c.company_name}</option>
-                            ))}
-                        </select>
-                    </div>
-
-                    <button
-                        onClick={() => navigate("/clients/new")}
-                        className="border border-black px-3 py-2 rounded text-sm w-full sm:w-auto"
-                    >
-                        New Client
-                    </button>
-                </div>
-
-                {/* DATES */}
-                <div className="flex flex-col sm:flex-row gap-6">
-                    <div className="flex-1">
-                        <label className="block mb-1">Estimate Date <span className="text-red-500">*</span></label>
+                <div className="space-y-6 bg-white p-6 rounded border border-gray-200">
+                    {/* QUOTATION NUMBER */}
+                    <div>
+                        <label className="block mb-1 font-semibold">Quotation Number</label>
                         <input
-                            type="date"
-                            value={form.estimate_date}
-                            onChange={e => setForm({ ...form, estimate_date: e.target.value })}
+                            value={form.quotation_number}
+                            onChange={e => setForm({ ...form, quotation_number: e.target.value })}
                             className="w-full border border-gray-200 px-3 py-2 rounded"
+                            placeholder="Leave blank for auto-generate.."
                         />
                     </div>
 
-                    <div className="flex-1">
-                        <label className="block mb-1">Expiry Date <span className="text-red-500">*</span></label>
-                        <input
-                            type="date"
-                            value={form.expiry_date}
-                            onChange={e => setForm({ ...form, expiry_date: e.target.value })}
-                            className="w-full border border-gray-200 px-3 py-2 rounded"
-                        />
-                    </div>
-                </div>
-
-                {/* PROJECT */}
-                <div>
-                    <label className="block mb-1">Project Title <span className="text-red-500">*</span></label>
-                    <input
-                        value={form.project_title}
-                        onChange={e => setForm({ ...form, project_title: e.target.value })}
-                        className="w-full border border-gray-200 px-3 py-2 rounded"
-                    />
-                </div>
-
-                <div className="flex flex-col sm:flex-row gap-6">
-                    <div className="flex-1">
-                        <label className="block mb-1">Start Date <span className="text-red-500">*</span></label>
-                        <input
-                            type="date"
-                            value={form.start_date}
-                            onChange={e => setForm({ ...form, start_date: e.target.value })}
-                            className="w-full border border-gray-200 px-3 py-2 rounded"
-                        />
-                    </div>
-                    <div className="flex-1">
-                        <label className="block mb-1">Deadline <span className="text-red-500">*</span></label>
-                        <input
-                            type="date"
-                            value={form.deadline}
-                            onChange={e => setForm({ ...form, deadline: e.target.value })}
-                            className="w-full border border-gray-200 px-3 py-2 rounded"
-                        />
-                    </div>
-                </div>
-
-                {/* ITEM LIST */}
-                <div className="mt-6 flex flex-col">
-                    <h3 className="font-semibold mb-3">Item List <span className="text-red-500">*</span></h3>
-                    <div className="overflow-x-auto border border-gray-200 rounded-lg flex-1">
-                        <table className="w-full text-sm min-w-[800px]">
-                            <thead className="bg-gray-50">
-                                <tr>
-                                    <th className="p-3 text-center">Detail Item</th>
-                                    <th className="p-3 text-center w-28">Qty</th>
-                                    <th className="p-3 text-center w-36">Price</th>
-                                    <th className="p-3 text-center w-40">Tax</th>
-                                    <th className="p-3 text-center w-36 hidden sm:table-cell">Tax Amount</th>
-                                    <th className="p-3 w-12">Action</th>
-                                </tr>
-                            </thead>
-
-                            <tbody>
-                                {quotationItems.map((item, index) => (
-                                    <tr key={index}>
-                                        {/* DETAIL ITEM */}
-                                        <td className="p-3">
-                                            <select
-                                                className="w-full border border-gray-200 rounded p-2 mb-2 text-black bg-white"
-                                                value={item.item_id}
-                                                onChange={(e) => handleSelectItem(index, e.target.value)}
-                                            >
-                                                <option value="">Select Item</option>
-                                                {itemsMaster.map(i => (
-                                                    <option key={i.id} value={i.id}>
-                                                        {i.item_name}
-                                                    </option>
-                                                ))}
-                                            </select>
-
-                                            <input
-                                                className="w-full border border-gray-200 rounded p-2 text-sm"
-                                                placeholder="Description"
-                                                value={item.description}
-                                                onChange={(e) =>
-                                                    updateItem(index, "description", e.target.value)
-                                                }
-                                            />
-                                        </td>
-
-                                        {/* QTY */}
-                                        <td className="p-3 text-right">
-                                            <input
-                                                type="number"
-                                                min="1"
-                                                className="w-full border border-gray-200 rounded p-2 text-right"
-                                                value={item.qty}
-                                                onChange={(e) =>
-                                                    updateItem(index, "qty", e.target.value)
-                                                }
-                                            />
-                                        </td>
-
-                                        {/* PRICE */}
-                                        <td className="p-3 text-right">
-                                            <input
-                                                type="number"
-                                                className="w-full border border-gray-200 rounded p-2 text-right"
-                                                value={item.price}
-                                                onChange={(e) =>
-                                                    updateItem(index, "price", e.target.value)
-                                                }
-                                            />
-                                        </td>
-
-                                        {/* TAX */}
-                                        <td className="p-3">
-                                            <select
-                                                className="w-full border border-gray-200 rounded p-2 text-black bg-white"
-                                                value={item.tax_id}
-                                                onChange={(e) =>
-                                                    updateItem(index, "tax_id", e.target.value)
-                                                }
-                                            >
-                                                <option value="">Select Tax</option>
-                                                {taxes.map(t => (
-                                                    <option key={t.id} value={t.id}>
-                                                        {t.name} {t.rate}%
-                                                    </option>
-                                                ))}
-                                            </select>
-
-                                        </td>
-
-                                        {/* TAX AMOUNT */}
-                                        <td className="p-3 text-right">
-                                            {item.tax_id ? ((item.qty * item.price * item.tax_rate) / 100).toLocaleString() : '0'}
-                                        </td>
-
-                                        {/* ACTION */}
-                                        <td className="p-3 text-center">
-                                            <button
-                                                onClick={() => removeLine(index)}
-                                                className="text-red-500 hover:text-red-700"
-                                            >
-                                                <Trash2 size={16} />
-                                            </button>
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
-
-                    <button
-                        onClick={addLine}
-                        className="mt-3 flex items-center gap-2 text-white bg-blue-600 px-3 py-2 rounded self-end"
-                    >
-                        <Plus size={16} /> Add New Line
-                    </button>
-                </div>
-
-                {/* TERM LIST */}
-                <div className="mt-6 flex flex-col">
-                    <h3 className="font-semibold mb-3">Payment Terms <span className="text-red-500">*</span></h3>
-                    <div className="overflow-x-auto border border-gray-200 rounded-lg flex-1">
-                        <table className="w-full text-sm min-w-[800px]">
-                            <thead className="bg-gray-50">
-                                <tr>
-                                    <th className="p-3 text-center w-32">Term Number</th>
-                                    <th className="p-3 text-center w-40 hidden sm:table-cell">Nominal</th>
-                                    <th className="p-3 text-center w-40 hidden sm:table-cell">Term Percentage</th>
-                                    <th className="p-3 text-center w-48 hidden sm:table-cell">Term Estimate</th>
-                                    <th className="p-3 text-center w-12 ">Action</th>
-                                </tr>
-                            </thead>
-
-                            <tbody>
-                                {quotationTerms.map((term, index) => (
-                                    <tr key={index} >
-                                        {/* TERM NUMBER */}
-                                        <td className="p-3 text-center">
-                                            <input
-                                                type="number"
-                                                min="1"
-                                                className="w-full border border-gray-200 rounded p-2 text-center"
-                                                value={term.term_number}
-                                                onChange={(e) =>
-                                                    updateTerm(index, "term_number", Number(e.target.value))
-                                                }
-                                            />
-                                        </td>
-
-                                        {/* NOMINAL */}
-                                        <td className="p-3 text-right">
-                                            <input
-                                                type="number"
-                                                className="w-full border border-gray-200 rounded p-2 text-right"
-                                                value={term.nominal}
-                                                onChange={(e) =>
-                                                    updateTerm(index, "nominal", Number(e.target.value))
-                                                }
-                                            />
-                                        </td>
-
-                                        {/* TERM PERCENTAGE */}
-                                        <td className="p-3 text-right">
-                                            <input
-                                                type="number"
-                                                className="w-full border border-gray-200 rounded p-2 text-right"
-                                                value={term.term_percentage}
-                                                onChange={(e) =>
-                                                    updateTerm(index, "term_percentage", Number(e.target.value))
-                                                }
-                                            />
-                                        </td>
-
-                                        {/* TERM ESTIMATE */}
-                                        <td className="p-3">
-                                            <input
-                                                type="date"
-                                                className="w-full border border-gray-200 rounded p-2"
-                                                value={term.term_estimate}
-                                                onChange={(e) =>
-                                                    updateTerm(index, "term_estimate", e.target.value)
-                                                }
-                                            />
-                                        </td>
-
-                                        {/* ACTION */}
-                                        <td className="p-3 text-center">
-                                            <button
-                                                onClick={() => removeTerm(index)}
-                                                className="text-red-500 hover:text-red-700"
-                                            >
-                                                <Trash2 size={16} />
-                                            </button>
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
-
-                    <button
-                        onClick={addTerm}
-                        className="mt-3 flex items-center gap-2 text-white bg-blue-600 px-3 py-2 rounded self-end"
-                    >
-                        <Plus size={16} /> Add New Term
-                    </button>
-                </div>
-
-                {/* SUMMARY */}
-                <div className="w-100 ml-auto border border-gray-200 rounded p-4 space-y-2">
-                    <div className="flex justify-between">
-                        <span>Subtotal</span>
-                        <span>{subtotal.toLocaleString()}</span>
-                    </div>
-
-                    <div className="flex justify-between items-center">
-                        <span>Discount</span>
-                        <div className="flex gap-2">
+                    {/* CLIENT */}
+                    <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-end">
+                        <div className="flex-1 w-full relative">
+                            <label className="block mb-1 text-sm font-medium font-semibold">Client <span className="text-red-500">*</span></label>
                             <input
-                                type="number"
-                                value={form.discount}
-                                onChange={e => setForm({ ...form, discount: e.target.value })}
-                                className="w-20 border border-gray-200 rounded px-2"
+                                type="text"
+                                value={searchTermClient}
+                                onChange={handleSearchClientChange}
+                                onFocus={() => setShowDropdownClient(true)}
+                                onBlur={() => setTimeout(() => setShowDropdownClient(false), 200)}
+                                className="w-full border border-gray-200 rounded px-3 py-2"
+                                placeholder="Search and select client..."
                             />
-                            <select
-                                value={form.discount_type}
-                                onChange={e => setForm({ ...form, discount_type: e.target.value })}
-                                className="border border-gray-200 rounded px-2"
-                            >
-                                <option value="percent">%</option>
-                                <option value="nominal">Rp</option>
-                            </select>
+                            {showDropdownClient && filteredClients.length > 0 && (
+                                <ul className="absolute z-10 w-full bg-white border border-gray-200 rounded mt-1 max-h-40 overflow-y-auto">
+                                    {filteredClients.map((client) => (
+                                        <li
+                                            key={client.id}
+                                            onMouseDown={() => handleClientSelect(client)}
+                                            className="px-3 py-2 hover:bg-gray-100 cursor-pointer"
+                                        >
+                                            {client.company_name}
+                                        </li>
+                                    ))}
+                                </ul>
+                            )}
+                        </div>
+
+                        {/* <button
+                            onClick={() => navigate("/clients/new")}
+                            className="border border-black px-3 py-2 rounded text-sm w-full sm:w-auto"
+                        >
+                            New Client
+                        </button> */}
+                    </div>
+                    <div className="flex flex-col sm:flex-row gap-6">
+                        <div className="flex-1">
+                            <label className="block mb-1 font-semibold">Quotation Date <span className="text-red-500">*</span></label>
+                            <input
+                                type="date"
+                                value={form.estimate_date}
+                                onChange={e => setForm({ ...form, estimate_date: e.target.value })}
+                                className="w-full border border-gray-200 px-3 py-2 rounded"
+                            />
+                        </div>
+
+                        <div className="flex-1">
+                            <label className="block mb-1 font-semibold">Expiry Date <span className="text-red-500">*</span></label>
+                            <input
+                                type="date"
+                                value={form.expiry_date}
+                                onChange={e => setForm({ ...form, expiry_date: e.target.value })}
+                                className="w-full border border-gray-200 px-3 py-2 rounded"
+                            />
                         </div>
                     </div>
 
-                    {/* TAX BREAKDOWN */}
-                    {Object.keys(taxBreakdown).length > 0 && (
-                        <div className="space-y-1">
-                            {Object.entries(taxBreakdown).map(([taxId, tax]) => (
-                                <div key={taxId} className="flex justify-between text-sm">
-                                    <span>{tax.name} ({tax.rate}%)</span>
-                                    <span>{tax.amount.toLocaleString()}</span>
+                    {/* PROJECT */}
+                    <div className="relative">
+                        <label className="block mb-1 font-semibold">Project Title <span className="text-red-500">*</span></label>
+                        <input
+                            type="text"
+                            value={searchTermProject}
+                            onChange={handleSearchProjectChange}
+                            onFocus={() => {
+                                handleProjectFocus();
+                                setShowDropdownProject(true);
+                            }}
+                            onBlur={() => setTimeout(() => setShowDropdownProject(false), 200)}
+                            className="w-full border border-gray-200 rounded px-3 py-2"
+                            placeholder="Search and select project..."
+                        />
+                        {showDropdownProject && filteredProjects.length > 0 && (
+                            <ul className="absolute z-10 w-full bg-white border border-gray-200 rounded mt-1 max-h-40 overflow-y-auto">
+                                {filteredProjects.map((project) => (
+                                    <li
+                                        key={project.id}
+                                        onMouseDown={() => handleProjectSelect(project)}
+                                        className="px-3 py-2 hover:bg-gray-100 cursor-pointer"
+                                    >
+                                        {project.project_title}
+                                    </li>
+                                ))}
+                            </ul>
+                        )}
+                    </div>
+
+                    {/* <div className="flex flex-col sm:flex-row gap-6">
+                        <div className="flex-1">
+                            <label className="block mb-1 font-semibold">Start Date <span className="text-red-500">*</span></label>
+                            <input
+                                type="date"
+                                value={form.start_date}
+                                onChange={e => setForm({ ...form, start_date: e.target.value })}
+                                className="w-full border border-gray-200 px-3 py-2 rounded"
+                            />
+                        </div>
+                        <div className="flex-1">
+                            <label className="block mb-1 font-semibold">Deadline <span className="text-red-500">*</span></label>
+                            <input
+                                type="date"
+                                value={form.deadline}
+                                onChange={e => setForm({ ...form, deadline: e.target.value })}
+                                className="w-full border border-gray-200 px-3 py-2 rounded"
+                            />
+                        </div>
+                    </div> */}
+
+                    {/* ITEM LIST */}
+                    <div className="mt-6 flex flex-col">
+                        <h3 className="font-semibold mb-3">Item List</h3>
+                        <div className="overflow-x-auto border border-gray-200 rounded-lg flex-1">
+                            <table className="w-full text-sm min-w-[800px]">
+                                <thead className="bg-gray-50">
+                                    <tr>
+                                        <th className="p-3 text-center font-semibold">Detail Item</th>
+                                        <th className="p-3 text-center w-28 font-semibold">Unit</th>
+                                        <th className="p-3 text-center w-28 font-semibold">Qty</th>
+                                        <th className="p-3 text-center w-36 font-semibold">Price</th>
+                                        <th className="p-3 text-center w-36 font-semibold">Total</th>
+                                        <th className="p-3 w-12 font-semibold">Action</th>
+                                    </tr>
+                                </thead>
+
+                                <tbody>
+                                    {quotationItems.map((item, index) => (
+                                        <tr key={index}>
+                                            {/* Detail Item */}
+                                            <td className="p-3">
+                                                <div className="relative mb-2">
+                                                    <input
+                                                        type="text"
+                                                        value={searchTermItems[index] || ""}
+                                                        onChange={(e) => handleSearchItemChange(index, e)}
+                                                        onFocus={() => setShowDropdownItems(prev => {
+                                                            const updated = [...prev];
+                                                            updated[index] = true;
+                                                            return updated;
+                                                        })}
+                                                        onBlur={() => setTimeout(() => setShowDropdownItems(prev => {
+                                                            const updated = [...prev];
+                                                            updated[index] = false;
+                                                            return updated;
+                                                        }), 200)}
+                                                        className="w-full border border-gray-200 rounded p-2 text-sm"
+                                                        placeholder="Search and select item..."
+                                                    />
+                                                    {showDropdownItems[index] && filteredItems(index).length > 0 && (
+                                                        <ul className="absolute z-10 w-full bg-white border border-gray-200 rounded mt-1 max-h-40 overflow-y-auto">
+                                                            {filteredItems(index).map((item) => (
+                                                                <li
+                                                                    key={item.id}
+                                                                    onMouseDown={() => handleItemSelect(index, item)}
+                                                                    className="px-3 py-2 hover:bg-gray-100 cursor-pointer"
+                                                                >
+                                                                    {item.item_name}
+                                                                </li>
+                                                            ))}
+                                                        </ul>
+                                                    )}
+                                                </div>
+
+                                                <input
+                                                    className="w-full border border-gray-200 rounded p-2 text-sm mb-2"
+                                                    placeholder="Item Name"
+                                                    value={item.item_name}
+                                                    onChange={(e) =>
+                                                        updateItem(index, "item_name", e.target.value)
+                                                    }
+                                                />
+
+                                                <input
+                                                    className="w-full border border-gray-200 rounded p-2 text-sm"
+                                                    placeholder="Description"
+                                                    value={item.description}
+                                                    onChange={(e) =>
+                                                        updateItem(index, "description", e.target.value)
+                                                    }
+                                                />
+                                            </td>
+
+                                            {/* UNIT */}
+                                            <td className="p-3">
+                                                <input
+                                                    className="w-full border border-gray-200 rounded p-2 text-sm"
+                                                    placeholder="Unit"
+                                                    value={item.unit}
+                                                    onChange={(e) =>
+                                                        updateItem(index, "unit", e.target.value)
+                                                    }
+                                                />
+                                            </td>
+
+                                            {/* QTY */}
+                                            <td className="p-3 text-right">
+                                                <input
+                                                    type="number"
+                                                    min="1"
+                                                    className="w-full border border-gray-200 rounded p-2 text-right"
+                                                    value={item.qty}
+                                                    onChange={(e) =>
+                                                        updateItem(index, "qty", e.target.value)
+                                                    }
+                                                />
+                                            </td>
+
+                                            {/* PRICE */}
+                                            <td className="p-3 text-right">
+                                                <input
+                                                    type="text"
+                                                    className="w-full border border-gray-200 rounded p-2 text-right"
+                                                    value={"Rp " + item.price.toLocaleString()}
+                                                    onChange={(e) => {
+                                                        const value = e.target.value.replace(/Rp\s?/g, '').replace(/,/g, '');
+                                                        updateItem(index, "price", parseFloat(value) || 0);
+                                                    }}
+                                                />
+                                            </td>
+                                            {/* TOTAL */}
+                                            <td className="p-3 text-right">
+                                                <span className="w-full p-2 text-right block">
+                                                    Rp {(item.qty * item.price).toLocaleString()}
+                                                </span>
+                                            </td>
+                                            {/* ACTION */}
+                                            <td className="p-3 text-center">
+                                                <button
+                                                    onClick={() => removeLine(index)}
+                                                    className="text-red-500 hover:text-red-700"
+                                                >
+                                                    <Trash2 size={16} />
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <button
+                            onClick={addLine}
+                            className="mt-3 flex items-center gap-2 text-white bg-blue-600 px-3 py-2 rounded self-end"
+                        >
+                            <Plus size={16} /> Add New Line
+                        </button>
+                    </div>
+
+                    {/* TERM LIST */}
+                    <div className="mt-6 flex flex-col">
+                        <h3 className="font-semibold mb-3">Payment Terms <span className="text-red-500">*</span></h3>
+                        <div className="overflow-x-auto border border-gray-200 rounded-lg flex-1">
+                            <table className="w-full text-sm min-w-[800px]">
+                                <thead className="bg-gray-50">
+                                    <tr>
+                                        <th className="p-3 text-center w-32 font-semibold">Term Number</th>
+                                        <th className="p-3 text-center w-40 hidden sm:table-cell font-semibold">Term Percentage</th>
+                                        <th className="p-3 text-center w-40 hidden sm:table-cell font-semibold">Nominal</th>
+                                        <th className="p-3 text-center w-48 hidden sm:table-cell font-semibold">Term Estimate</th>
+                                        <th className="p-3 text-center w-12 font-semibold">Action</th>
+                                    </tr>
+                                </thead>
+
+                                <tbody>
+                                    {quotationTerms.map((term, index) => (
+                                        <tr key={index} >
+                                            {/* TERM NUMBER */}
+                                            <td className="p-3 text-center">
+                                                <input
+                                                    type="number"
+                                                    min="1"
+                                                    className="w-full border border-gray-200 rounded p-2 text-center"
+                                                    value={term.term_number}
+                                                    onChange={(e) =>
+                                                        updateTerm(index, "term_number", Number(e.target.value))
+                                                    }
+                                                />
+                                            </td>
+
+                                            {/* TERM PERCENTAGE */}
+                                            <td className="p-3 text-right">
+                                                <input
+                                                    type="text"
+                                                    className="w-full border border-gray-200 rounded p-2 text-right"
+                                                    value={term.term_percentage + "%"}
+                                                    onChange={(e) => {
+                                                        const value = e.target.value.replace(/%/g, '');
+                                                        updateTerm(index, "term_percentage", Number(value) || 0);
+                                                    }}
+                                                />
+                                            </td>
+
+                                            {/* NOMINAL */}
+                                            <td className="p-3 text-right">
+                                                <input
+                                                    type="text"
+                                                    className="w-full border border-gray-200 rounded p-2 text-right"
+                                                    value={"Rp " + term.nominal.toLocaleString()}
+                                                    disabled
+                                                />
+                                            </td>
+
+                                            {/* TERM ESTIMATE */}
+                                            <td className="p-3">
+                                                <input
+                                                    type="date"
+                                                    className="w-full border border-gray-200 rounded p-2"
+                                                    value={term.term_estimate}
+                                                    onChange={(e) =>
+                                                        updateTerm(index, "term_estimate", e.target.value)
+                                                    }
+                                                />
+                                            </td>
+
+                                            {/* ACTION */}
+                                            <td className="p-3 text-center">
+                                                <button
+                                                    onClick={() => removeTerm(index)}
+                                                    className="text-red-500 hover:text-red-700"
+                                                >
+                                                    <Trash2 size={16} />
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <button
+                            onClick={addTerm}
+                            className="mt-3 flex items-center gap-2 text-white bg-blue-600 px-3 py-2 rounded self-end"
+                        >
+                            <Plus size={16} /> Add New Term
+                        </button>
+                    </div>
+
+                    {/* TERM AND CONDITION */}
+                    <div>
+                        <label className="block font-semibold">Term & Conditions</label>
+                        <SlateEditor
+                            value={form.term_condition}
+                            onChange={(value) => setForm({ ...form, term_condition: value })}
+                            placeholder="Enter term conditions..." className="text-2xl"
+                        />
+                    </div>
+
+                    {/* SUMMARY */}
+                    <div className="w-100 ml-auto border border-gray-200 rounded p-4 space-y-2">
+                        <div className="flex justify-between">
+                            <span>Subtotal</span>
+                            <span>Rp {subtotal.toLocaleString()}</span>
+                        </div>
+
+                        <div className="flex justify-between items-center">
+                            <span>Discount</span>
+                            <div className="flex gap-2">
+                                <input
+                                    type="number"
+                                    value={form.discount}
+                                    onChange={e => setForm({ ...form, discount: e.target.value })}
+                                    className="w-20 border border-gray-200 rounded px-2"
+                                />
+                                <div className="relative">
+                                    <select
+                                        value={form.discount_type}
+                                        onChange={e => setForm({ ...form, discount_type: e.target.value })}
+                                        className="border border-gray-200 rounded px-2 appearance-none pr-8"
+                                    >
+                                        <option value="percent">%</option>
+                                        <option value="nominal">Rp</option>
+                                    </select>
+                                    <ChevronDown size={16} className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none" />
                                 </div>
-                            ))}
+                            </div>
                         </div>
-                    )}
 
-                    <div className="flex justify-between font-bold">
-                        <span>Total</span>
-                        <span>{total.toLocaleString()}</span>
+                        <div className="flex justify-between items-center">
+                            <span>Tax</span>
+                            <div className="flex gap-2">
+                                <input
+                                    type="number"
+                                    value={form.tax}
+                                    onChange={e => setForm({ ...form, tax: e.target.value })}
+                                    className="w-20 border border-gray-200 rounded px-2"
+                                />
+                                <div className="relative">
+                                    <select
+                                        value={form.tax_type}
+                                        onChange={e => setForm({ ...form, tax_type: e.target.value })}
+                                        className="border border-gray-200 rounded px-2 appearance-none pr-8"
+                                    >
+                                        <option value="percent">%</option>
+                                        <option value="nominal">Rp</option>
+                                    </select>
+                                    <ChevronDown size={16} className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none" />
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="flex justify-between font-semibold">
+                            <span>Total</span>
+                            <span>Rp {total.toLocaleString()}</span>
+                        </div>
                     </div>
-                </div>
 
-                {/* ACTION */}
-                <div className=" flex flex-col sm:flex-row justify-end gap-3">
-                    <button
-                        onClick={() => submit("draft")}
-                        className="bg-gray-200 px-4 py-2 rounded"
-                    >
-                        Save as Draft
-                    </button>
-                    <button
-                        onClick={() => submit("sent")}
-                        className="bg-blue-600 text-white px-4 py-2 rounded"
-                    >
-                        Save and Sent
-                    </button>
-                    <button type="button"
-                        onClick={() => navigate("/quotations")}
-                        className="bg-gray-200 px-4 py-2 rounded border border-gray-200"
-                    >Cancel</button>
+                    {/* ACTION */}
+                    <div className=" flex flex-col sm:flex-row justify-end gap-3">
+                        <button
+                            onClick={() => submit("Draft")}
+                            className="bg-gray-200 px-4 py-2 rounded hover:bg-gray-300"
+                        >
+                            Save as Draft
+                        </button>
+                        <button
+                            onClick={() => submit("Sent")}
+                            className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
+                        >
+                            Save and Sent
+                        </button>
+                        <button type="button"
+                            onClick={() => navigate("/quotations")}
+                            className="px-4 py-2 rounded border border-gray-200 hover:bg-gray-300"
+                        >Cancel</button>
+                    </div>
                 </div>
             </div>
+
+            {/* ADDED MODAL */}
+            {showAddedModal && (
+                <div
+                    className="fixed inset-0 z-50 flex items-center justify-center"
+                >
+                    {/* Backdrop */}
+                    <div
+                        className="absolute inset-0 bg-black/40"
+                        onClick={handleCloseAddedModal}
+                    />
+
+                    {/* Modal */}
+                    <div className="relative bg-white rounded-2xl w-full max-w-md mx-4 z-50 shadow-xl">
+                        {/* Header */}
+                        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
+                            <div className="flex items-center gap-3">
+                                <div className="w-10 h-10 flex items-center justify-center rounded-full bg-green-100 text-green-600">
+                                    <CheckCircle size={16} />
+                                </div>
+                                <h3 className="text-lg font-semibold">Success</h3>
+                            </div>
+                        </div>
+
+                        <div className="px-6 py-5">
+                            <p className="text-gray-700">Quotation successfully added!</p>
+                            <div className="flex justify-end mt-6">
+                                <button
+                                    autoFocus
+                                    onClick={handleCloseAddedModal}
+                                    tabIndex={0}
+                                    className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                                >
+                                    OK
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* SENT MODAL */}
+            {showSentModal && (
+                <div
+                    className="fixed inset-0 z-50 flex items-center justify-center"
+                >
+                    {/* Backdrop */}
+                    <div
+                        className="absolute inset-0 bg-black/40"
+                        onClick={handleCloseSentModal}
+                    />
+
+                    {/* Modal */}
+                    <div className="relative bg-white rounded-2xl w-full max-w-md mx-4 z-50 shadow-xl">
+                        {/* Header */}
+                        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
+                            <div className="flex items-center gap-3">
+                                <div className="w-10 h-10 flex items-center justify-center rounded-full bg-green-100 text-green-600">
+                                    <CheckCircle size={16} />
+                                </div>
+                                <h3 className="text-lg font-semibold">Success</h3>
+                            </div>
+                        </div>
+
+                        <div className="px-6 py-5">
+                            <p className="text-gray-700">Quotation successfully sent!</p>
+                            <div className="flex justify-end mt-6">
+                                <button
+                                    autoFocus
+                                    onClick={handleCloseSentModal}
+                                    tabIndex={0}
+                                    className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                                >
+                                    OK
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* LESS THAN MODAL */}
+            {showLessThanModal && (
+                <div
+                    className="fixed inset-0 z-50 flex items-center justify-center"
+                >
+                    {/* Backdrop */}
+                    <div
+                        className="absolute inset-0 bg-black/40"
+                        onClick={() => setShowLessThanModal(false)}
+                    />
+
+                    {/* Modal */}
+                    <div className="relative bg-white rounded-2xl w-full max-w-md mx-4 z-50 shadow-xl">
+                        {/* Header */}
+                        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
+                            <div className="flex items-center gap-3">
+                                <div className="w-10 h-10 flex items-center justify-center rounded-full bg-red-100 text-red-600">
+                                    <X size={16} />
+                                </div>
+                                <h3 className="text-lg font-semibold">Error</h3>
+                            </div>
+                        </div>
+
+                        <div className="px-6 py-5">
+                            <p className="text-gray-700">The term payment percentage must not be less than 100%</p>
+                            <div className="flex justify-end mt-6">
+                                <button
+                                    autoFocus
+                                    onClick={() => setShowLessThanModal(false)}
+                                    tabIndex={0}
+                                    className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                                >
+                                    OK
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* MORE THAN MODAL */}
+            {showMoreThanModal && (
+                <div
+                    className="fixed inset-0 z-50 flex items-center justify-center"
+                >
+                    {/* Backdrop */}
+                    <div
+                        className="absolute inset-0 bg-black/40"
+                        onClick={() => setShowMoreThanModal(false)}
+                    />
+
+                    {/* Modal */}
+                    <div className="relative bg-white rounded-2xl w-full max-w-md mx-4 z-50 shadow-xl">
+                        {/* Header */}
+                        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
+                            <div className="flex items-center gap-3">
+                                <div className="w-10 h-10 flex items-center justify-center rounded-full bg-red-100 text-red-600">
+                                    <X size={16} />
+                                </div>
+                                <h3 className="text-lg font-semibold">Error</h3>
+                            </div>
+                        </div>
+
+                        <div className="px-6 py-5">
+                            <p className="text-gray-700">The percentage of payment terms must not be more than 100%</p>
+                            <div className="flex justify-end mt-6">
+                                <button
+                                    autoFocus
+                                    onClick={() => setShowMoreThanModal(false)}
+                                    tabIndex={0}
+                                    className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                                >
+                                    OK
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* NO PROJECT MODAL */}
+            {showNoProjectModal && (
+                <div
+                    className="fixed inset-0 z-50 flex items-center justify-center"
+                >
+                    {/* Backdrop */}
+                    <div
+                        className="absolute inset-0 bg-black/40"
+                        onClick={() => setShowNoProjectModal(false)}
+                    />
+
+                    {/* Modal */}
+                    <div className="relative bg-white rounded-2xl w-full max-w-md mx-4 z-50 shadow-xl">
+                        {/* Header */}
+                        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
+                            <div className="flex items-center gap-3">
+                                <div className="w-10 h-10 flex items-center justify-center rounded-full bg-blue-100 text-blue-600">
+                                    <CheckCircle size={16} />
+                                </div>
+                                <h3 className="text-lg font-semibold">Notice</h3>
+                            </div>
+                        </div>
+
+                        <div className="px-6 py-5">
+                            <p className="text-gray-700">The client doesn't have a project yet.</p>
+                            <div className="flex justify-end mt-6 gap-3">
+                                <button
+                                    autoFocus
+                                    onClick={() => navigate("/projects/new")}
+                                    tabIndex={0}
+                                    className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                                >
+                                    Add Project
+                                </button>
+                                <button
+                                    onClick={() => setShowNoProjectModal(false)}
+                                    className="px-4 py-2 border border-gray-200 rounded-lg hover:bg-gray-50"
+                                >
+                                    Cancel
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
         </QuotationLayout>
     );
 };

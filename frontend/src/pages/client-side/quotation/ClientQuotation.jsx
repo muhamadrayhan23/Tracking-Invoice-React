@@ -30,7 +30,6 @@ const ClientQuotation = () => {
 
     const filteredQuotations = quotations.filter((quo) =>
         (quo.quotation_number || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (quo.project_title || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
         (quo.status || '').toLowerCase().includes(searchTerm.toLowerCase())
     );
 
@@ -54,20 +53,6 @@ const ClientQuotation = () => {
             setError(err.message || "Failed to load quotations");
         } finally {
             setLoading(false);
-        }
-    };
-
-    const statusBadge = (status) => {
-        const base = "px-3 py-1 rounded-full text-xs font-medium";
-        switch (status) {
-            case "Sent":
-                return `${base} bg-yellow-100 text-yellow-700`;
-            case "Approved":
-                return `${base} bg-green-100 text-green-700`;
-            case "Rejected":
-                return `${base} bg-red-100 text-red-700`;
-            default:
-                return base;
         }
     };
 
@@ -119,11 +104,10 @@ const ClientQuotation = () => {
                                             <td>{formatDate(quo.expiry_date)}</td>
                                             <td>Rp {Number(quo.total).toLocaleString("id-ID")}</td>
                                             <td>
-                                                <span className={`px-2 py-1 rounded-full text-xs ${quo.status === 'Draft' ? 'text-gray-600 bg-gray-50' :
-                                                    quo.status === 'sent' ? 'text-blue-500 bg-blue-50' :
-                                                        quo.status === 'revised' ? 'text-yellow-500 bg-yellow-50' :
-                                                            quo.status === 'approved' ? 'text-green-500 bg-green-50' :
-                                                                quo.status === 'rejected' ? 'text-red-500 bg-red-50' :
+                                                <span className={`px-2 py-1 rounded-full text-xs ${quo.status === 'Sent' ? 'text-blue-500 bg-blue-50' :
+                                                        quo.status === 'Revised' ? 'text-yellow-500 bg-yellow-50' :
+                                                            quo.status === 'Approved' ? 'text-green-500 bg-green-50' :
+                                                                quo.status === 'Rejected' ? 'text-red-500 bg-red-50' :
                                                                     'text-gray-500 bg-gray-50'
                                                     }`}>
                                                     {quo.status}

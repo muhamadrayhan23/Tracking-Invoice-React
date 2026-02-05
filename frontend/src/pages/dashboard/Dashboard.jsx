@@ -3,6 +3,7 @@ import {
     BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell
 } from "recharts";
 import { useEffect, useState } from "react";
+import { getDashboardData } from "../../services/dashboardService";
 
 
 const Dashboard = () => {
@@ -11,8 +12,9 @@ const Dashboard = () => {
     const [dashboardData, setDashboardData] = useState({
         quotationSummary: [],
         invoiceSummary: [],
-        overdueInvoices: [],
-        notifications: []
+        recentInvoices: [],
+        overdueNotifications: [],
+        quotationNotifications: []
     });
     const [loading, setLoading] = useState(true);
 
@@ -55,17 +57,21 @@ const Dashboard = () => {
        FETCH DASHBOARD DATA
     ========================= */
     const fetchDashboardData = async () => {
-        const user = JSON.parse(localStorage.getItem("user"));
-        const res = await fetch("http://localhost:3000/api/dashboard", {
-            headers: {
-                "x-user-id": user.id
-            }
-        });
-
-        if (!res.ok) throw new Error("Dashboard error");
-
-        const data = await res.json();
-        setDashboardData(data);
+        try {
+            const data = await getDashboardData();
+            console.log("Data API From", data.invoiceSummary);
+            setDashboardData(data);
+        } catch (error) {
+            console.error("Error fetching dashboard data:", error);
+            // Set empty data on error
+            setDashboardData({
+                quotationSummary: [],
+                invoiceSummary: [],
+                recentInvoices: [],
+                overdueNotifications: [],
+                quotationNotifications: []
+            });
+        }
     };
 
 
@@ -78,10 +84,11 @@ const Dashboard = () => {
 
     // Prepare data for charts
     const getQuotationStatusColor = (status) => {
-        if (status === 'draft') return 'gray';
-        if (status === 'sent') return 'blue';
-        if (status === 'approved') return 'green';
-        if (status === 'rejected') return 'red'; // default
+        if (status === 'Draft') return 'gray';
+        if (status === 'Sent') return 'blue';
+        if (status === 'Approved') return 'green';
+        if (status === 'Rejected') return 'red';
+        if (status === 'Expired') return 'red';
     };
 
     const getInvoiceStatusColor = (status) => {
@@ -101,7 +108,7 @@ const Dashboard = () => {
         if (color === 'yellow') return '#EAB308';
     };
 
-    const allQuotationStatuses = ['draft', 'sent', 'approved', 'rejected'];
+    const allQuotationStatuses = ['Draft', 'Sent', 'Revised', 'Approved', 'Rejected', 'Expired'];
     const quotationData = allQuotationStatuses.map(status => {
         const found = dashboardData.quotationSummary.find(item => item.status === status);
         return {
@@ -111,12 +118,15 @@ const Dashboard = () => {
         };
     });
 
+
+
     const allInvoiceStatuses = ['Draft', 'Issued', 'Partially Paid', 'Paid', 'Overdue'];
     const invoiceData = allInvoiceStatuses.map(status => {
-        const found = dashboardData.invoiceSummary.find(item => item.status === status);
+        const found = dashboardData.invoiceSummary.find(item => item.status.toLowerCase() === status.toLocaleLowerCase()
+        );
         return {
-            name: status.charAt(0).toUpperCase() + status.slice(1),
-            value: found ? found.count : 0,
+            name: status,
+            value: found ? Number(found.count) : 0,
             color: getInvoiceStatusColor(status)
         };
     });
@@ -137,57 +147,64 @@ const Dashboard = () => {
                     </p>
                 </div>
 
-                {/* KPI CARDS QUOTATION*/}
-                <div className="flex flex-wrap gap-2.5">
-                    {quotationData.map((q, i) => (
-                        <div
-                            key={i}
-                            className="flex-1 min-w-[200px] bg-white rounded-xl p-5 shadow-sm
-                       border-l-4"
-                            style={{
-                                borderColor:
-                                    q.color === "gray" ? "#9CA3AF" :
-                                        q.color === "blue" ? "#3B82F6" :
-                                            q.color === "green" ? "#22C55E" :
-                                                "#EF4444"
-                            }}
-                        >
-                            <div className="flex items-center justify-between mb-2">
-                                <p className="text-gray-500 text-sm">
-                                    {q.name}
-                                </p>
-
-                                <span
-                                    className={`text-xs px-2 py-1 rounded-full
-                        ${q.color === "gray" && "bg-gray-100 text-gray-600"}
-                        ${q.color === "blue" && "bg-blue-100 text-blue-600"}
-                        ${q.color === "green" && "bg-green-100 text-green-600"}
-                        ${q.color === "red" && "bg-red-100 text-red-600"}
-                         ${q.color === "yellow" && "bg-yellow-100 text-yellow-600"}
-                    `}
-                                >
-                                    {q.name}
-                                </span>
-                            </div>
-
-                            <h2 className="text-3xl font-bold">
-                                {q.value}
-                            </h2>
+                {/* RECENT INVOICES TABLE */}
+                <div className="bg-white rounded-xl p-6 border border-gray-200">
+                    <h2 className="text-xl font-semibold mb-4">Recent Invoices</h2>
+                    {dashboardData.recentInvoices && dashboardData.recentInvoices.length > 0 ? (
+                        <div className="overflow-x-auto">
+                            <table className="min-w-full table-auto">
+                                <thead>
+                                    <tr className="bg-gray-50">
+                                        <th className="px-4 py-2 text-left text-xs font-medium uppercase tracking-wider">Invoice Number</th>
+                                        <th className="px-4 py-2 text-left text-xs font-medium uppercase tracking-wider">Client</th>
+                                        <th className="px-4 py-2 text-left text-xs font-medium uppercase tracking-wider">Total</th>
+                                        <th className="px-4 py-2 text-left text-xs font-medium uppercase tracking-wider">Status</th>
+                                        <th className="px-4 py-2 text-left text-xs font-medium uppercase tracking-wider">Due Date</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="bg-white divide-y divide-gray-200">
+                                    {dashboardData.recentInvoices.slice(0, 5).map((inv, i) => (
+                                        <tr key={i}>
+                                            <td className="px-4 py-2 whitespace-nowrap text-sm font-medium text-gray-900">{inv.invoice_number}</td>
+                                            <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-500">{inv.company_name}</td>
+                                            <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-500">Rp {Number(inv.total).toLocaleString("id-ID")}</td>
+                                            <td className="px-4 py-2 whitespace-nowrap">
+                                                <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${inv.status === 'Paid' ? 'bg-green-50 text-green-500' :
+                                                    inv.status === 'Partially Paid' ? 'bg-blue-50 text-blue-500' :
+                                                        inv.status === 'Issued' ? 'bg-yellow-50 text-yellow-500' :
+                                                            inv.status === 'Overdue' ? 'bg-red-50 text-red-500' :
+                                                                'bg-gray-50 text-gray-500'
+                                                    }`}>
+                                                    {inv.status}
+                                                </span>
+                                            </td>
+                                            <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-500">
+                                                {inv.due_date ? new Date(inv.due_date).toLocaleDateString('id-ID', {
+                                                    year: 'numeric',
+                                                    month: '2-digit',
+                                                    day: '2-digit'
+                                                }) : 'N/A'}
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
                         </div>
-                    ))}
+                    ) : (
+                        <p className="text-gray-500">No invoices found</p>
+                    )}
                 </div>
-
 
                 {/* CHARTS */}
                 <div className="flex flex-wrap gap-2.5">
 
                     {/* BAR CHART */}
-                    <div className="flex-1 min-w-[300px] bg-white rounded-xl p-6 shadow-sm">
+                    <div className="flex-1 min-w-[300px] bg-white rounded-xl p-6 border border-gray-200">
                         <h3 className="font-semibold mb-4">
                             Quotation Summary
                         </h3>
 
-                        <ResponsiveContainer width="100%" height={250}>
+                        <ResponsiveContainer width="100%" height={300}>
                             <BarChart data={quotationData}>
                                 <XAxis dataKey="name" />
                                 <YAxis />
@@ -198,7 +215,7 @@ const Dashboard = () => {
                     </div>
 
                     {/* PIE CHART INVOICE */}
-                    <div className="flex-1 min-w-[300px] bg-white rounded-xl p-6 shadow-sm">
+                    <div className="flex-1 min-w-[300px] bg-white rounded-xl p-6 border border-gray-200">
                         <h3 className="font-semibold mb-4">
                             Invoice Summary
                         </h3>
@@ -246,17 +263,17 @@ const Dashboard = () => {
                 <div className="flex flex-wrap gap-2.5">
 
                     {/* OVERDUE */}
-                    <div className="flex-1 min-w-[300px] bg-white rounded-xl p-6 shadow-sm">
+                    <div className="flex-1 min-w-[300px] bg-white rounded-xl p-6 border border-gray-200">
                         <h3 className="font-semibold mb-4">
                             Invoice Overdue
                         </h3>
 
                         <ul className="space-y-3 text-sm">
-                            {dashboardData.overdueInvoices.length > 0 ? dashboardData.overdueInvoices.map((inv, i) => (
+                            {dashboardData.overdueNotifications?.length > 0 ? dashboardData.overdueNotifications.map((inv, i) => (
                                 <li key={i} className="flex justify-between">
-                                    <span>{inv.invoice_number} • {inv.company_name}</span>
-                                    <span className="text-red-600 font-semibold">
-                                        Rp {Number(inv.overdue_amount).toLocaleString("id-ID")}
+                                    <span>{inv.invoice_number} • {inv.company_name} • {inv.status}</span>
+                                    <span className="text-red-500 font-regular">
+                                        Rp {Number(inv.total).toLocaleString("id-ID")} ({inv.days_overdue} days overdue)
                                     </span>
                                 </li>
                             )) : (
@@ -265,39 +282,42 @@ const Dashboard = () => {
                         </ul>
                     </div>
 
-                    {/* NOTIFICATION */}
-                    <div className="flex-1 min-w-[300px] bg-white rounded-xl p-6 shadow-sm">
+                    {/* QUOTATION NOTIFICATIONS */}
+                    <div className="flex-1 min-w-[300px] bg-white rounded-xl p-6 border border-gray-200">
                         <h3 className="font-semibold mb-4">
-                            Notifications
+                            Quotation Notifications
                         </h3>
 
                         <ul className="space-y-3 text-sm">
-                            {dashboardData.notifications?.length > 0 ? (
-                                dashboardData.notifications.map((notif, i) => (
+                            {dashboardData.quotationNotifications?.length > 0 ? (
+                                dashboardData.quotationNotifications.map((notif, i) => (
                                     <li key={i} className="flex justify-between">
                                         <span>
-                                            {notif.ref} {notif.status}
+                                            {notif.ref} - {new Date(notif.date).toLocaleDateString()}
                                         </span>
                                         <span
                                             className={
-                                                notif.status === "approved"
-                                                    ? "text-green-600"
-                                                    : "text-red-600"
+                                                notif.status === "Approved" ? "text-green-500" :
+                                                    notif.status === "Sent" ? "text-blue-500" :
+                                                        notif.status === "Revised" ? "text-yellow-500" :
+                                                            notif.status === "Rejected" ? "text-red-500" :
+                                                                notif.status === "Expired" ? "text-red-600"
+                                                                    : "text-gray-500"
                                             }
                                         >
-                                            {notif.status.charAt(0).toUpperCase() + notif.status.slice(1)}
+                                            {notif.status}
                                         </span>
                                     </li>
                                 ))
                             ) : (
-                                <li className="text-gray-500">No recent notifications</li>
+                                <li className="text-gray-500">No recent quotation notifications</li>
                             )}
                         </ul>
 
                     </div>
                 </div>
             </div>
-        </DashboardLayout>
+        </DashboardLayout >
     );
 };
 

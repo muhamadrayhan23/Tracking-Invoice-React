@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import ItemLayout from "../../components/layout/Item-Layout";
 import { Link, useNavigate } from "react-router";
-import { X, Eye, Edit, Trash2, Search, Boxes, DollarSign, List, ReceiptText } from "lucide-react";
+import { X, Eye, Edit, Trash2, Search, Boxes, DollarSign, List, ReceiptText, CheckCircle, XCircle } from "lucide-react";
 
 const Items = () => {
     const [items, setItems] = useState([]);
@@ -10,10 +10,17 @@ const Items = () => {
     const [showDetail, setShowDetail] = useState(false);
     const [selectedItems, setSelectedItems] = useState(null);
     const [searchTerm, setSearchTerm] = useState("");
-    const ITEMS_PER_PAGE = 5;
+    const ITEMS_PER_PAGE = 10;
     const [currentPage, setCurrentPage] = useState(1);
+    const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+    const [itemToDelete, setItemToDelete] = useState(null);
+    const [showAlert, setShowAlert] = useState(false);
+    const [alertMessage, setAlertMessage] = useState("");
+    const [alertType, setAlertType] = useState("success");
 
     const navigate = useNavigate();
+    const deleteModalRef = useRef(null);
+    const alertModalRef = useRef(null);
 
     const filteredItems = items.filter((i) =>
         i.item_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -50,41 +57,81 @@ const Items = () => {
         setCurrentPage(1);
     }, [searchTerm]);
 
+    useEffect(() => {
+        if (showDeleteConfirm && deleteModalRef.current) {
+            deleteModalRef.current.focus();
+        }
+    }, [showDeleteConfirm]);
 
-    const handleDelete = async (id) => {
-        if (!confirm("Yakin ingin menghapus item ini?")) return;
+    useEffect(() => {
+        if (showAlert && alertModalRef.current) {
+            alertModalRef.current.focus();
+        }
+    }, [showAlert]);
+
+
+    const handleDelete = (id) => {
+        setItemToDelete(id);
+        setShowDeleteConfirm(true);
+    };
+
+    const handleConfirmDelete = async () => {
+        if (!itemToDelete) return;
 
         try {
-            const res = await fetch(`http://localhost:3000/api/items/${id}`, {
+            const res = await fetch(`http://localhost:3000/api/items/${itemToDelete}`, {
                 method: "DELETE",
             });
 
-            alert("Item berhasil dihapus!");
+            const data = await res.json();
 
-            if (!res.ok) throw new Error("Failed to delete");
+            if (!res.ok) throw new Error(data.message || "Failed to delete");
+
+            setAlertMessage("The item has been moved to the trash!");
+            setAlertType("success");
+            setShowAlert(true);
 
             fetchItems();
         } catch (err) {
-            alert(err.message);
+            setAlertMessage(err.message);
+            setAlertType("error");
+            setShowAlert(true);
+        } finally {
+            setShowDeleteConfirm(false);
+            setItemToDelete(null);
         }
+    };
+
+    const handleCloseAlert = () => {
+        setShowAlert(false);
+        setAlertMessage("");
     };
 
     return (
         <ItemLayout>
             <div className="m-3 flex flex-col gap-3">
-                <div className="flex items-center justify-between mb-2.5 border-b border-gray-200">
-                    <h1 className="text-2xl font-semibold pb-4">Item</h1>
-                    <Link
-                        to="/items/new"
-                        className="bg-blue-600 text-white px-4 py-2 rounded"
-                    >
-                        + Create New Item
-                    </Link>
+                <div className="flex items-center justify-between mb-2.">
+                    <h1 className="text-2xl font-bold pb-4">Item</h1>
+                    <div className="flex gap-2">
+                        <Link
+                            to="/items/trash"
+                            className="bg-red-50 text-red-500 flex items-center px-4 py-2 gap-2 rounded hover:bg-red-100"
+                        >
+                            <Trash2 size={16} />
+                            Trash
+                        </Link>
+                        <Link
+                            to="/items/new"
+                            className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
+                        >
+                            + Create New Item
+                        </Link>
+                    </div>
                 </div>
 
                 <div className="bg-white rounded border border-gray-200 p-4">
                     <div className="flex justify-between items-center mb-4 relative">
-                        <h2 className="font-medium">Client List</h2>
+                        <h2 className="font-semibold">Item List</h2>
                         <input
                             type="search"
                             placeholder="Search item..."
@@ -105,9 +152,10 @@ const Items = () => {
                         <div className="overflow-x-auto">
                             <table className="w-full text-center">
                                 <thead>
-                                    <tr className="text-sm text-gray-600 border-b border-gray-200 bg-[#FAFAFA]">
+                                    <tr className="text-sm border-b border-gray-200 bg-[#FAFAFA]">
                                         <th className="py-3">Item</th>
                                         <th>Category</th>
+                                        <th>Unit</th>
                                         <th>Default Price</th>
                                         <th>Actions</th>
                                     </tr>
@@ -117,6 +165,7 @@ const Items = () => {
                                         <tr key={i.id} className="border-b border-gray-200">
                                             <td className="py-4">{i.item_name}</td>
                                             <td>{i.category}</td>
+                                            <td>{i.unit}</td>
                                             <td>Rp {Number(i.default_price).toLocaleString("id-ID")}</td>
                                             <td className=" gap-2 items-center p-1">
                                                 <button
@@ -196,7 +245,7 @@ const Items = () => {
                         {/* Modal */}
                         <div className="relative bg-white rounded-2xl w-full max-w-lg mx-4 z-50 shadow-xl">
                             {/* Header */}
-                            <div className="flex items-center justify-between px-6 py-4 border-b">
+                            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
                                 <div className="flex items-center gap-3">
                                     <div className="w-10 h-10 flex items-center justify-center rounded-full bg-blue-100 text-blue-600">
                                         <Boxes size={16} />
@@ -219,28 +268,17 @@ const Items = () => {
                                         <Boxes size={16} />
                                         <span>Item</span>
                                     </div>
-                                    <div className="border rounded-lg px-4 py-3 bg-gray-50">
+                                    <div className="border border-gray-200 rounded-lg px-4 py-3 bg-gray-50">
                                         {selectedItems.item_name}
                                     </div>
                                 </div>
 
                                 <div>
                                     <div className="flex items-center gap-2 text-sm text-black mb-2">
-                                        <ReceiptText size={16} />
-                                        <span>Description</span>
-                                    </div>
-                                    <div className="border rounded-lg px-4 py-3 bg-gray-50">
-                                        {selectedItems.description}
-                                    </div>
-                                </div>
-
-
-                                <div>
-                                    <div className="flex items-center gap-2 text-sm text-black mb-2">
                                         <List size={16} />
                                         <span>Category</span>
                                     </div>
-                                    <div className="border rounded-lg px-4 py-3 bg-gray-50">
+                                    <div className="border border-gray-200 rounded-lg px-4 py-3 bg-gray-50">
                                         {selectedItems.category}
                                     </div>
                                 </div>
@@ -250,9 +288,119 @@ const Items = () => {
                                         <DollarSign size={16} />
                                         <span>Default Price</span>
                                     </div>
-                                    <div className="border rounded-lg px-4 py-3 bg-gray-50 whitespace-pre-line">
+                                    <div className="border border-gray-200 rounded-lg px-4 py-3 bg-gray-50 whitespace-pre-line">
                                         {Number(selectedItems.default_price).toLocaleString("id-ID")}
                                     </div>
+                                </div>
+
+                                <div>
+                                    <div className="flex items-center gap-2 text-sm text-black mb-2">
+                                        <ReceiptText size={16} />
+                                        <span>Description</span>
+                                    </div>
+                                    <div className="border border-gray-200 rounded-lg px-4 py-3 bg-gray-50">
+                                        {selectedItems.description || "-"}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {/* DELETE CONFIRMATION MODAL */}
+                {showDeleteConfirm && (
+                    <div
+                        ref={deleteModalRef}
+                        className="fixed inset-0 z-50 flex items-center justify-center"
+                        onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                                handleConfirmDelete();
+                            } else if (e.key === 'Escape') {
+                                setShowDeleteConfirm(false);
+                            }
+                        }}
+                        tabIndex={-1}
+                    >
+                        {/* Backdrop */}
+                        <div
+                            className="absolute inset-0 bg-black/40"
+                            onClick={() => setShowDeleteConfirm(false)}
+                        />
+
+                        {/* Modal */}
+                        <div className="relative bg-white rounded-2xl w-full max-w-md mx-4 z-50 shadow-xl">
+                            {/* Header */}
+                            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
+                                <div className="flex items-center gap-3">
+                                    <div className="w-10 h-10 flex items-center justify-center rounded-full bg-red-100 text-red-600">
+                                        <Trash2 size={16} />
+                                    </div>
+                                    <h3 className="text-lg font-semibold">Confirm Delete</h3>
+                                </div>
+                            </div>
+
+                            <div className="px-6 py-5">
+                                <p className="text-gray-700">Are you sure want to delete this item?</p>
+                                <div className="flex justify-end gap-3 mt-6">
+                                    <button
+                                        onClick={handleConfirmDelete}
+                                        className=" px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700"
+                                    >
+                                        Delete
+                                    </button>
+                                    <button
+                                        onClick={() => setShowDeleteConfirm(false)}
+                                        className=" px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
+                                    >
+                                        Cancel
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {/* ALERT MODAL */}
+                {showAlert && (
+                    <div
+                        ref={alertModalRef}
+                        className="fixed inset-0 z-50 flex items-center justify-center"
+                        onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === 'Escape') {
+                                handleCloseAlert();
+                            }
+                        }}
+                        tabIndex={-1}
+                    >
+                        {/* Backdrop */}
+                        <div
+                            className="absolute inset-0 bg-black/40"
+                            onClick={handleCloseAlert}
+                        />
+
+                        {/* Modal */}
+                        <div className="relative bg-white rounded-2xl w-full max-w-md mx-4 z-50 shadow-xl">
+                            {/* Header */}
+                            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
+                                <div className="flex items-center gap-3">
+                                    <div className={`w-10 h-10 flex items-center justify-center rounded-full ${alertType === 'success' ? 'bg-green-100 text-green-600' : 'bg-red-100 text-red-600'}`}>
+                                        {alertType === 'success' ? <CheckCircle size={16} /> : <XCircle size={16} />}
+                                    </div>
+                                    <h3 className="text-lg font-semibold">
+                                        {alertType === 'success' ? 'Success' : 'Error'}
+                                    </h3>
+                                </div>
+                            </div>
+
+                            <div className="px-6 py-5">
+                                <p className="text-gray-700">{alertMessage}</p>
+                                <div className="flex justify-end mt-6">
+                                    <button
+                                        onClick={handleCloseAlert}
+                                        className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                                    >
+                                        OK
+                                    </button>
                                 </div>
                             </div>
                         </div>

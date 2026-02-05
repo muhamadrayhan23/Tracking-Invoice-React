@@ -2,11 +2,86 @@ const express = require("express");
 const router = express.Router();
 const db = require("../config/db");
 
-// GET All Client
+// GET Deleted Clients
+router.get("/trash", async (req, res) => {
+    try {
+        const [results] = await db.query("SELECT * FROM client WHERE deleted_at IS NOT NULL");
+        res.json(results);
+    } catch (err) {
+        res.status(500).json({ message: err.message });
+    }
+});
+
+// Restore Client
+router.put("/restore/:id", async (req, res) => {
+    const { id } = req.params;
+    try {
+        const [result] = await db.query("UPDATE client SET deleted_at = NULL WHERE id = ?", [id]);
+        if (result.affectedRows === 0) return res.status(404).json({ message: "Client tidak ditemukan" });
+        res.json({ message: "Client berhasil dipulihkan!" });
+    } catch (err) {
+        res.status(500).json({ message: err.message });
+    }
+});
+
+// GET All Active Clients
 router.get("/", async (req, res) => {
     try {
-        const [results] = await db.query("SELECT * FROM client");
+        const [results] = await db.query("SELECT * FROM client WHERE deleted_at IS NULL");
         res.json(results);
+    } catch (err) {
+        res.status(500).json(err);
+    }
+});
+
+// Permanent Delete Clients
+router.delete("/permanent/:id", async (req, res) => {
+    const { id } = req.params;
+    const conn = await db.getConnection();
+    try {
+        await conn.beginTransaction();
+        const [clientRows] = await conn.query("SELECT user_id FROM client WHERE id = ?", [id]);
+        if (clientRows.length === 0) throw new Error("Client tidak ditemukan");
+        const userId = clientRows[0].user_id;
+
+        await conn.query("DELETE FROM client WHERE id = ?", [id]);
+
+        if (userId) {
+            const [userRefs] = await conn.query("SELECT COUNT(*) as count FROM client WHERE user_id = ?", [userId]);
+            if (userRefs[0].count === 0) {
+                await conn.query("DELETE FROM users WHERE id = ?", [userId]);
+            }
+        }
+
+        await conn.commit();
+        res.json({ message: "Client dihapus permanen dari database" });
+    } catch (err) {
+        await conn.rollback();
+        res.status(500).json({ message: err.message });
+    } finally {
+        conn.release();
+    }
+});
+
+// Soft Delete Client
+router.delete("/:id", async (req, res) => {
+    const { id } = req.params;
+    try {
+        const [result] = await db.query("UPDATE client SET deleted_at = NOW() WHERE id = ?", [id]);
+        if (result.affectedRows === 0) return res.status(404).json({ message: "Client tidak ditemukan" });
+
+        res.json({ message: "Client dipindahkan ke sampah" });
+    } catch (err) {
+        res.status(500).json({ message: err.message });
+    }
+});
+
+// GET Unique Company Names with Codes
+router.get("/companies", async (req, res) => {
+    try {
+        const [results] = await db.query("SELECT DISTINCT company_name, company_code FROM client WHERE company_name IS NOT NULL AND company_name != '' ORDER BY company_name");
+        const companies = results.map(row => ({ company_name: row.company_name, company_code: row.company_code }));
+        res.json(companies);
     } catch (err) {
         res.status(500).json(err);
     }
@@ -26,11 +101,11 @@ router.get("/:id", async (req, res) => {
 
 // CREATE New Client
 router.post("/", async (req, res) => {
-    const { company_name, pic_name, email, address, contact, username, password } = req.body;
+    const { company_name, sub_company, company_code, subcompany_code, pic_name, email, address, contact, username, password } = req.body;
     try {
-        const insertClientSql = "INSERT INTO client (company_name, pic_name, email, address, contact) VALUES (?, ?, ?, ?, ?)";
+        const insertClientSql = "INSERT INTO client (company_name, sub_company, company_code, subcompany_code, pic_name, email, address, contact) VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
 
-        const [clientResult] = await db.query(insertClientSql, [company_name, pic_name, email, address, contact]);
+        const [clientResult] = await db.query(insertClientSql, [company_name, sub_company, company_code, subcompany_code, pic_name, email, address, contact]);
         const clientId = clientResult.insertId;
 
         // 2. Jika username & password ada, insert ke users dan update client.user_id
@@ -67,6 +142,9 @@ router.put("/:id", async (req, res) => {
     const { id } = req.params;
     const {
         company_name,
+        sub_company,
+        company_code,
+        subcompany_code,
         pic_name,
         email,
         address,
@@ -81,8 +159,8 @@ router.put("/:id", async (req, res) => {
         await conn.beginTransaction();
 
         // Update basic client info
-        const updateClientSql = "UPDATE client SET company_name = ?, pic_name = ?, email = ?, address = ?, contact = ? WHERE id = ?";
-        await conn.query(updateClientSql, [company_name, pic_name, email, address, contact, id]);
+        const updateClientSql = "UPDATE client SET company_name = ?, sub_company = ?, company_code = ?, subcompany_code = ?, pic_name = ?, email = ?, address = ?, contact = ? WHERE id = ?";
+        await conn.query(updateClientSql, [company_name, sub_company, company_code, subcompany_code, pic_name, email, address, contact, id]);
 
         // Handle username and password
         if (username && password) {
@@ -108,51 +186,6 @@ router.put("/:id", async (req, res) => {
         res.json({
             message: "Client berhasil diperbarui!"
         });
-    } catch (err) {
-        await conn.rollback();
-        res.status(500).json({ message: "Database error", detail: err.message });
-    } finally {
-        conn.release();
-    }
-});
-
-// DELETE Client
-router.delete("/:id", async (req, res) => {
-    const { id } = req.params;
-
-    const conn = await db.getConnection();
-
-    try {
-        await conn.beginTransaction();
-
-        // Check if client has quotations
-        const [quotationRows] = await conn.query("SELECT COUNT(*) as count FROM quotation WHERE client_id = ?", [id]);
-        if (quotationRows[0].count > 0) {
-            await conn.rollback();
-            return res.status(400).json({ message: "Cannot delete client with existing quotations" });
-        }
-
-        // Check if client has invoices
-        const [invoiceRows] = await conn.query("SELECT COUNT(*) as count FROM invoice WHERE client_id = ?", [id]);
-        if (invoiceRows[0].count > 0) {
-            await conn.rollback();
-            return res.status(400).json({ message: "Cannot delete client with existing invoices" });
-        }
-
-        // Get user_id if exists
-        const [clientRows] = await conn.query("SELECT user_id FROM client WHERE id = ?", [id]);
-        const client = clientRows[0];
-
-        // Delete associated user if exists
-        if (client.user_id) {
-            await conn.query("DELETE FROM users WHERE id = ?", [client.user_id]);
-        }
-
-        // Delete client
-        await conn.query("DELETE FROM client WHERE id = ?", [id]);
-
-        await conn.commit();
-        res.json({ message: "Client berhasil dihapus" });
     } catch (err) {
         await conn.rollback();
         res.status(500).json({ message: "Database error", detail: err.message });

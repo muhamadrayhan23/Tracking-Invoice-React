@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import ClientDashboardLayout from "../../../components/client-layout/Dashboard-Layout";
+import { getClientDashboardData } from "../../../services/clientDashboardService";
 import {
-    LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart,
+    XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart,
     Bar, AreaChart, Area
 } from "recharts";
 
@@ -15,7 +16,9 @@ const ClientDashboard = () => {
         quotations: [],
         invoices: [],
         overdueInvoices: [],
-        paymentStatus: []
+        paymentStatus: [],
+        quotationSummary: [],
+        invoiceSummary: []
     });
 
 
@@ -39,21 +42,9 @@ const ClientDashboard = () => {
                 setUserName(user.username);
                 setUserRole(user.role);
 
-                // Fetch dashboard data
-                const res = await fetch(`http://localhost:3000/api/dashboard/client/${user.id}`);
-
-                if (!res.ok) {
-                    throw new Error("Dashboard client fetch failed");
-                }
-
-                const data = await res.json();
-
-                setDashboardData({
-                    quotations: data.quotations || [],
-                    invoices: data.invoices || [],
-                    overdueInvoices: data.overdueInvoices || [],
-                    paymentStatus: data.paymentStatus || []
-                });
+                // Fetch data from backend
+                const data = await getClientDashboardData();
+                setDashboardData(data);
 
             } catch (err) {
                 console.error("Client dashboard fetch error:", err);
@@ -83,9 +74,9 @@ const ClientDashboard = () => {
 
     // Prepare data for charts
     const getQuotationStatusColor = (status) => {
-        if (status === 'sent') return 'blue';
-        if (status === 'approved') return 'green';
-        if (status === 'rejected') return 'red'; // default
+        if (status === 'Sent') return 'blue';
+        if (status === 'Approved') return 'green';
+        if (status === 'Rejected') return 'red'; // default
     };
 
     const getInvoiceStatusColor = (status) => {
@@ -104,22 +95,22 @@ const ClientDashboard = () => {
         if (color === 'yellow') return '#EAB308';
     };
 
-    const allQuotationStatuses = ['sent', 'approved', 'rejected'];
+    const allQuotationStatuses = ['Sent', 'Revised', 'Approved', 'Rejected', 'Expired'];
     const quotationData = allQuotationStatuses.map(status => {
-        const count = dashboardData.quotations.filter(item => item.status === status).length;
+        const found = dashboardData.quotationSummary ? dashboardData.quotationSummary.find(item => item.status === status) : null;
         return {
             name: status.charAt(0).toUpperCase() + status.slice(1),
-            value: count,
+            value: found ? found.count : 0,
             color: getQuotationStatusColor(status)
         };
     });
 
     const allInvoiceStatuses = ['Issued', 'Partially Paid', 'Paid', 'Overdue'];
     const invoiceData = allInvoiceStatuses.map(status => {
-        const count = dashboardData.invoices.filter(item => item.status === status).length;
+        const found = dashboardData.invoiceSummary ? dashboardData.invoiceSummary.find(item => item.status === status) : null;
         return {
             name: status.charAt(0).toUpperCase() + status.slice(1),
-            value: count,
+            value: found ? found.count : 0,
             color: getInvoiceStatusColor(status)
         };
     });
@@ -153,11 +144,11 @@ const ClientDashboard = () => {
                                             <td className="px-4 py-2 whitespace-nowrap text-sm font-medium text-gray-900">{inv.invoice_number}</td>
                                             <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-500">Rp {Number(inv.total).toLocaleString("id-ID")}</td>
                                             <td className="px-4 py-2 whitespace-nowrap">
-                                                <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${inv.status === 'Paid' ? 'bg-green-100 text-green-800' :
-                                                    inv.status === 'Partially Paid' ? 'bg-blue-100 text-blue-800' :
-                                                        inv.status === 'Issued' ? 'bg-yellow-100 text-yellow-800' :
-                                                            inv.status === 'Overdue' ? 'bg-red-100 text-red-800' :
-                                                                'bg-gray-100 text-gray-800'
+                                                <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${inv.status === 'Paid' ? 'bg-green-50 text-green-500' :
+                                                    inv.status === 'Partially Paid' ? 'bg-blue-50 text-blue-500' :
+                                                        inv.status === 'Issued' ? 'bg-yellow-50 text-yellow-500' :
+                                                            inv.status === 'Overdue' ? 'bg-red-50 text-red-500' :
+                                                                'bg-gray-50 text-gray-500'
                                                     }`}>
                                                     {inv.status}
                                                 </span>
@@ -233,12 +224,11 @@ const ClientDashboard = () => {
                                                     {q.estimate_date ? formatDate(q.estimate_date) : 'N/A'}
                                                 </td>
                                                 <td className="px-2 py-2 whitespace-nowrap">
-                                                    <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${q.status === 'approved' ? 'bg-green-100 text-green-500' :
-                                                        q.status === 'sent' ? 'bg-blue-100 text-blue-500' :
-                                                            q.status === 'draft' ? 'bg-gray-100 text-gray-500' :
-                                                                q.status === 'revised' ? 'bg-yellow-100 text-yellow-500' :
-                                                                    q.status === 'rejected' ? 'bg-red-100 text-red-500' :
-                                                                        'bg-red-100 text-red-800'
+                                                    <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${q.status === 'Approved' ? 'bg-green-100 text-green-500' :
+                                                        q.status === 'Sent' ? 'bg-blue-100 text-blue-500' :
+                                                            q.status === 'Revised' ? 'bg-yellow-100 text-yellow-500' :
+                                                                q.status === 'Rejected' ? 'bg-red-100 text-red-500' :
+                                                                    'bg-red-100 text-red-800'
                                                         }`}>
                                                         {q.status.charAt(0).toUpperCase() + q.status.slice(1)}
                                                     </span>
@@ -258,26 +248,42 @@ const ClientDashboard = () => {
                         <h2 className="text-xl font-semibold mb-4">Payment Terms Highlight</h2>
                         {dashboardData.paymentStatus && dashboardData.paymentStatus.length > 0 ? (
                             <ul className="space-y-2">
-                                {dashboardData.paymentStatus.slice(0, 3).map(term => (
-                                    <li key={`${term.invoice_number}-${term.term_number}`} className="flex justify-between items-center p-3 bg-gray-50 rounded">
+                                {dashboardData.paymentStatus.slice(0, 3).map((term, index) => (
+                                    <li
+                                        key={term.id}
+                                        className={`flex justify-between items-center p-3 rounded border transition-all ${index === 0
+                                            ? 'bg-gray-50 border-gray-200 '
+                                            : 'bg-gray-50 border-transparent'
+                                            }`}
+                                    >
                                         <div>
-                                            <span className="font-medium">{term.invoice_number} - Term {term.term_number}</span>
+                                            <div className="flex items-center gap-2">
+                                                <span className="font-medium text-gray-800">
+                                                    {term.invoice_number} - Term {term.term_number}
+                                                </span>
+
+                                            </div>
+                                            <div className="text-[11px] text-gray-500 italic">
+                                                Paid on: {new Date(term.payment_date).toLocaleDateString('id-ID')}
+                                            </div>
                                         </div>
+
                                         <div className="text-right">
-                                            <div className="text-gray-900 font-semibold">
+                                            <div className={`font-bold ${index === 0 ? 'text-blue-500' : 'text-gray-900'}`}>
                                                 Rp {Number(term.nominal).toLocaleString("id-ID")}
                                             </div>
-                                            <div className={`text-xs px-2 py-1 rounded-full ${term.term_status === 'paid' ? 'bg-green-500 text-white text-center' :
-                                                'bg-red-500 text-white text-center'
+                                            <div className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded-full inline-block ${term.payment_status === 'paid'
+                                                ? 'bg-green-100 text-green-500'
+                                                : 'bg-gray-100 text-gray-500'
                                                 }`}>
-                                                {term.term_status}
+                                                {term.payment_status}
                                             </div>
                                         </div>
                                     </li>
                                 ))}
                             </ul>
                         ) : (
-                            <p className="text-gray-500">No payment terms found</p>
+                            <p className="text-gray-500 text-sm italic">No payment terms found</p>
                         )}
                     </div>
                 </div>

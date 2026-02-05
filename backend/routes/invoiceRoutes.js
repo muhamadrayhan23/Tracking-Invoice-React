@@ -2,49 +2,53 @@ const express = require("express");
 const router = express.Router();
 const db = require("../config/db");
 
+/* ======================================================
+   GET USERNAME BY USER ID
+====================================================== */
+const getUsername = async (conn, userId) => {
+    if (!userId) return 'Unknown';
+    try {
+        const [[user]] = await conn.query("SELECT username FROM users WHERE id = ?", [userId]);
+        return user ? user.username : 'Unknown';
+    } catch (err) {
+        return 'Unknown';
+    }
+};
+
 
 
 /* ======================================================
- Evaluate Invoice Status 
+ Evaluate Invoice Status
 ====================================================== */
-const evaluateInvoiceStatus = async (invoice_id, conn = db) => {
+const evaluateInvoiceStatus = async (invoice_id, issued_by = null, conn = db) => {
     /* GET INVOICE */
     const [[invoice]] = await conn.query(
-        "SELECT total, status FROM invoice WHERE id = ?",
+        "SELECT total, status, due_date FROM invoice WHERE id = ?",
         [invoice_id]
     );
     if (!invoice) return;
 
-    /* GET TERMIN SUMMARY */
-    const [[summary]] = await conn.query(`
-        SELECT
-            COUNT(*) AS total_terms,
-            SUM(CASE WHEN term_status = 'paid' THEN 1 ELSE 0 END) AS paid_terms,
-            SUM(CASE WHEN term_status = 'paid' THEN nominal ELSE 0 END) AS paid_amount,
-            SUM(
-                CASE
-                    WHEN term_status = 'unpaid'
-                     AND term_estimate < CURDATE()
-                    THEN 1 ELSE 0
-                END
-            ) AS overdue_terms
-        FROM invoice_terms
-        WHERE invoice_id = ?
+    /* GET PAID AMOUNT */
+    const [[{ paid_amount }]] = await conn.query(`
+        SELECT COALESCE(SUM(amount_paid), 0) AS paid_amount
+        FROM payment
+        WHERE invoice_id = ? AND payment_status = 'paid'
     `, [invoice_id]);
 
     let newStatus = "Issued";
 
-    /* PRIORITAS OVERDUE */
-    if (summary.overdue_terms > 0) {
-        newStatus = "Overdue";
-    }
     /* TOTAL PAID SAMA DENGAN TOTAL INVOICE */
-    else if (summary.paid_amount == invoice.total) {
+    if (paid_amount == invoice.total) {
         newStatus = "Paid";
     }
-    /* SEBAGIAN TERMIN SUDAH DIBAYAR */
-    else if (summary.paid_terms > 0) {
+    /* SEBAGIAN SUDAH DIBAYAR */
+    else if (paid_amount > 0) {
         newStatus = "Partially Paid";
+    }
+
+    /* PRIORITAS OVERDUE */
+    if (paid_amount < invoice.total && invoice.due_date < new Date().toISOString().split('T')[0]) {
+        newStatus = "Overdue";
     }
 
     /* UPDATE STATUS JIKA BERUBAH */
@@ -53,17 +57,30 @@ const evaluateInvoiceStatus = async (invoice_id, conn = db) => {
             "UPDATE invoice SET status = ? WHERE id = ?",
             [newStatus, invoice_id]
         );
+
+        // Insert log for status change
+        await conn.query(`
+            INSERT INTO invoice_status_logs
+            (invoice_id, status, description, created_by, issued_at)
+            VALUES (?, ?, ?, ?, NOW())
+        `, [invoice_id, newStatus, `Status changed to ${newStatus}`, issued_by]);
     }
 };
 
 /* ======================================================
    GENERATE INVOICE NUMBER (Otomatis)
 ====================================================== */
-const generateInvoiceNumber = async (conn) => {
-    const [[row]] = await conn.query(
-        "SELECT COUNT(*) AS total FROM invoice"
+const generateInvoiceNumber = async (conn, client_id, invoice_id, created_at) => {
+    const [[client]] = await conn.query(
+        "SELECT company_code, subcompany_code FROM client WHERE id = ?",
+        [client_id]
     );
-    return `INV-${String(row.total + 1).padStart(5, "0")}`;
+    if (!client || !client.company_code) {
+        throw new Error("Client company_code not found");
+    }
+    const date = new Date(created_at).toISOString().slice(0, 10).replace(/-/g, '');
+    const code = client.subcompany_code ? `${client.company_code}-${client.subcompany_code}` : client.company_code;
+    return `${date}-${code}-${invoice_id}`;
 };
 
 /* ======================================================
@@ -72,9 +89,10 @@ const generateInvoiceNumber = async (conn) => {
 router.get("/", async (req, res) => {
     try {
         const [rows] = await db.query(`
-            SELECT i.*, c.company_name
+            SELECT i.*, i.term_condition, c.company_name, q.quotation_number
             FROM invoice i
             JOIN client c ON i.client_id = c.id
+            LEFT JOIN quotation q ON i.quotation_id = q.id
             ORDER BY i.created_at DESC
         `);
         res.json(rows);
@@ -84,19 +102,20 @@ router.get("/", async (req, res) => {
 });
 
 /* ======================================================
-   GET INVOICE DETAIL
+    GET INVOICE DETAIL
 ====================================================== */
 router.get("/:id", async (req, res) => {
     const { id } = req.params;
 
     try {
         const [[invoice]] = await db.query(`
-            SELECT i.*, c.company_name, c.address, q.project_title
-            FROM invoice i
-            JOIN client c ON i.client_id = c.id
-            JOIN quotation q ON i.quotation_id = q.id
-            WHERE i.id = ?
-        `, [id]);
+                SELECT i.*, i.term_condition, c.company_name, c.address, c.pic_name, c.contact, p.project_title, p.start_date, p.end_date
+                FROM invoice i
+                JOIN client c ON i.client_id = c.id
+                LEFT JOIN quotation q ON i.quotation_id = q.id
+                LEFT JOIN project p ON q.project_id = p.id
+                WHERE i.id = ?
+          `, [id]);
         if (!invoice) {
             return res.status(404).json({ message: "Invoice not found" });
         }
@@ -107,11 +126,60 @@ router.get("/:id", async (req, res) => {
         );
 
         const [terms] = await db.query(
-            "SELECT * FROM invoice_terms WHERE invoice_id = ? ORDER BY term_number",
+            "SELECT * FROM quotation_terms WHERE id = ?",
+            [invoice.quotation_term_id]
+        );
+
+        const [payments] = await db.query(
+            "SELECT * FROM payment WHERE invoice_id = ? ORDER BY payment_date",
             [id]
         );
 
-        res.json({ invoice, items, terms });
+        // Add payment_date and payment_status to terms
+        terms.forEach(term => {
+            if (payments.length > 0) {
+                term.payment_date = payments[0].payment_date;
+                term.payment_status = payments[0].payment_status;
+            } else {
+                term.payment_date = null;
+                term.payment_status = 'unpaid';
+            }
+        });
+
+        // Calculate subtotal as sum of item totals
+        const subtotal = items.reduce((sum, item) => sum + Number(item.total), 0);
+        let discount = Number(invoice.discount) || 0;
+        let tax = Number(invoice.tax) || 0;
+
+        // Convert discount and tax to absolute values for display if they are percent
+        if (invoice.discount_type === 'percent' && subtotal > 0) {
+            discount = (subtotal * discount) / 100;
+        }
+        if (invoice.tax_type === 'percent' && subtotal > 0) {
+            tax = (subtotal * tax) / 100;
+        }
+
+        const total = terms[0].nominal;
+
+        if (invoice.discount_type === 'percent' && subtotal > 0) {
+            discount = (discount / subtotal) * 100;
+        }
+        if (invoice.tax_type === 'percent' && subtotal > 0) {
+            tax = (tax / subtotal) * 100;
+        }
+
+        res.json({
+            invoice: {
+                ...invoice,
+                subtotal,
+                discount,
+                tax,
+                total
+            },
+            items,
+            terms,
+            payments
+        });
     } catch (err) {
         res.status(500).json({ message: err.message });
     }
@@ -120,6 +188,7 @@ router.get("/:id", async (req, res) => {
 /* ======================================================
    CREATE INVOICE FROM APPROVED QUOTATION
    STATUS DEFAULT: Draft
+   ONE INVOICE PER TERM
 ====================================================== */
 router.post("/from-quotation/:quotation_id", async (req, res) => {
     const { quotation_id } = req.params;
@@ -129,7 +198,7 @@ router.post("/from-quotation/:quotation_id", async (req, res) => {
         await conn.beginTransaction();
 
         const [[quotation]] = await conn.query(
-            "SELECT * FROM quotation WHERE id = ? AND status = 'approved'",
+            "SELECT *, term_condition FROM quotation WHERE id = ? AND status = 'Approved'",
             [quotation_id]
         );
 
@@ -139,78 +208,102 @@ router.post("/from-quotation/:quotation_id", async (req, res) => {
             });
         }
 
-        /* GET DUE DATE FROM LAST TERM */
-        const [[{ due_date }]] = await conn.query(
-            "SELECT MAX(term_estimate) AS due_date FROM quotation_terms WHERE quotation_id = ?",
-            [quotation_id]
-        );
-
-        const invoiceNumber = await generateInvoiceNumber(conn);
-
-        const [result] = await conn.query(`
-            INSERT INTO invoice
-            (invoice_number, quotation_id, client_id, issue_date, due_date,
-             subtotal, discount, tax, total, status)
-            VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, 'Draft')
-        `, [
-            invoiceNumber,
-            quotation.id,
-            quotation.client_id,
-            due_date,
-            quotation.subtotal,
-            quotation.discount,
-            quotation.tax,
-            quotation.total
-        ]);
-
-        const invoiceId = result.insertId;
-
-        /* COPY ITEMS */
-        const [qItems] = await conn.query(
-            "SELECT * FROM quotation_items WHERE quotation_id = ?",
+        /* GET TERMS */
+        const [qTerms] = await conn.query(
+            "SELECT * FROM quotation_terms WHERE quotation_id = ? ORDER BY term_number",
             [quotation.id]
         );
 
-        for (const item of qItems) {
-            await conn.query(`
-                INSERT INTO invoice_items
-                (invoice_id, item_id, description, qty, price, tax_id, tax_rate)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            `, [
-                invoiceId,
-                item.item_id,
-                item.description,
-                item.qty,
-                item.price,
-                item.tax_id,
-                item.tax_rate
-            ]);
+        if (qTerms.length === 0) {
+            return res.status(400).json({
+                message: "Quotation tidak memiliki terms"
+            });
         }
 
-        /* COPY TERMS */
-        const [qTerms] = await conn.query(
-            "SELECT * FROM quotation_terms WHERE quotation_id = ?",
+        /* GET ITEMS */
+        const [qItems] = await conn.query(
+            "SELECT qi.*, i.name AS item_name, i.unit FROM quotation_items qi JOIN items i ON qi.item_id = i.id WHERE qi.quotation_id = ?",
             [quotation.id]
         );
 
+        const createdInvoices = [];
+
         for (const term of qTerms) {
-            await conn.query(`
-                INSERT INTO invoice_terms
-                (invoice_id, term_number, nominal, term_percentage, term_estimate)
-                VALUES (?, ?, ?, ?, ?)
+            const [result] = await conn.query(`
+                INSERT INTO invoice
+            (invoice_number, quotation_id, quotation_term_id, client_id, issue_date, due_date,
+                subtotal, discount, tax, total, status, term_condition, created_by)
+        VALUES(NULL, ?, ?, ?, NULL, ?, ?, 0, 0, ?, 'Draft', ?, ?)
             `, [
-                invoiceId,
-                term.term_number,
+                quotation.id,
+                term.id,
+                quotation.client_id,
+                term.term_estimate,
                 term.nominal,
-                term.term_percentage,
-                term.term_estimate
+                term.nominal,
+                quotation.term_condition,
+                quotation.created_by
             ]);
+
+            const invoiceId = result.insertId;
+
+            // Get created_at from the inserted invoice
+            const [[invoice]] = await conn.query(
+                "SELECT created_at FROM invoice WHERE id = ?",
+                [invoiceId]
+            );
+
+            // Generate invoice number automatically using created_at
+            const invoiceNumber = await generateInvoiceNumber(conn, quotation.client_id, invoiceId, invoice.created_at);
+
+            // Update invoice with generated number
+            await conn.query(
+                "UPDATE invoice SET invoice_number = ? WHERE id = ?",
+                [invoiceNumber, invoiceId]
+            );
+
+            createdInvoices.push(invoiceId);
+
+            // Insert log for invoice creation
+            const username = await getUsername(conn, quotation.created_by);
+            await conn.query(`
+                INSERT INTO invoice_status_logs
+                (invoice_id, status, description, created_by, issued_at)
+                VALUES (?, 'Draft', ?, ?, NOW())
+            `, [invoiceId, `Invoice created\nBy: ${username}`, quotation.created_by]); // Use quotation's created_by
+
+            /* COPY ITEMS */
+            let subtotal = 0;
+            for (const item of qItems) {
+                const total = item.qty * item.price;
+                subtotal += total;
+                await conn.query(`
+                    INSERT INTO invoice_items
+            (invoice_id, item_name, description, qty, unit, price, total)
+        VALUES(?, ?, ?, ?, ?, ?, ?)
+            `, [
+                    invoiceId,
+                    item.item_name,
+                    item.description,
+                    item.qty,
+                    item.unit,
+                    item.price,
+                    total
+                ]);
+            }
+
+            // Update invoice with calculated subtotal (total remains as term.nominal)
+            await conn.query(`
+                UPDATE invoice
+                SET subtotal = ?
+            WHERE id = ?
+                `, [subtotal, invoiceId]);
         }
 
         await conn.commit();
         res.status(201).json({
-            message: "Invoice draft berhasil dibuat",
-            invoice_id: invoiceId
+            message: `${createdInvoices.length} invoice draft berhasil dibuat`,
+            invoice_ids: createdInvoices
         });
     } catch (err) {
         await conn.rollback();
@@ -225,6 +318,7 @@ router.post("/from-quotation/:quotation_id", async (req, res) => {
 ====================================================== */
 router.put("/:id/publish", async (req, res) => {
     const { id } = req.params;
+    const { issued_by } = req.body || {};
     const conn = await db.getConnection();
 
     try {
@@ -241,21 +335,41 @@ router.put("/:id/publish", async (req, res) => {
             });
         }
 
-        const [[lastTerm]] = await conn.query(`
-            SELECT term_estimate
-            FROM invoice_terms
-            WHERE invoice_id = ?
-            ORDER BY id DESC
-            LIMIT 1
-        `, [id]);
-
         await conn.query(`
             UPDATE invoice
             SET status = 'Issued',
-                issue_date = CURDATE(),
-                due_date = ?
+            issued_at = NOW(),
+            issue_date = CURDATE(),
+            due_date = DATE_ADD(CURDATE(), INTERVAL 1 MONTH)
             WHERE id = ?
-        `, [lastTerm?.term_estimate || null, id]);
+            `, [id]);
+
+        // Regenerate invoice number with issue_date
+        const [[invoiceDetails]] = await conn.query(
+            "SELECT client_id FROM invoice WHERE id = ?",
+            [id]
+        );
+        const newInvoiceNumber = await generateInvoiceNumber(conn, invoiceDetails.client_id, id, new Date().toISOString().split('T')[0]);
+        await conn.query(
+            "UPDATE invoice SET invoice_number = ? WHERE id = ?",
+            [newInvoiceNumber, id]
+        );
+
+
+
+        // Insert log for publishing invoice untuk pelacakan
+        const username = await getUsername(conn, issued_by);
+
+        await conn.query(`
+    INSERT INTO invoice_status_logs
+    (invoice_id, status, description, created_by, issued_by, issued_at)
+    VALUES (?, 'Issued', ?, ?, ?, NOW())
+`, [
+            id,
+            'Invoice published',
+            issued_by,
+            issued_by
+        ]);
 
         await conn.commit();
         res.json({ message: "Invoice berhasil dipublish" });
@@ -269,16 +383,15 @@ router.put("/:id/publish", async (req, res) => {
 
 
 /* ======================================
-   PAY INVOICE TERMIN 
+   PAY INVOICE (CLIENT)
 ====================================== */
-router.post("/:invoice_id/pay-term", async (req, res) => {
+router.post("/:invoice_id/pay", async (req, res) => {
     const { invoice_id } = req.params;
-    const { term_number, nominal } = req.body;
+    const { amount_paid, payment_date } = req.body;
 
-
-    if (!term_number || !nominal) {
+    if (!amount_paid || amount_paid <= 0) {
         return res.status(400).json({
-            message: "term_number dan nominal wajib diisi"
+            message: "amount wajib diisi dan harus lebih dari 0"
         });
     }
 
@@ -289,68 +402,136 @@ router.post("/:invoice_id/pay-term", async (req, res) => {
 
         /* CEK INVOICE */
         const [[invoice]] = await conn.query(
-            "SELECT id, status FROM invoice WHERE id = ?",
+            "SELECT id, status, total, client_id FROM invoice WHERE id = ?",
             [invoice_id]
         );
 
-        /* CEK STATUS INVOICE */
-        if (!["Issued", "Partially Paid"].includes(invoice.status)) {
-            return res.status(400).json({
-                message: "Invoice tidak bisa menerima pembayaran"
-            })
-        }
-
-        if (!invoice.status === "Issued") {
+        if (!invoice) {
             return res.status(404).json({
                 message: "Invoice tidak ditemukan"
             });
         }
 
-        /* CEK TERMIN */
-        const [[term]] = await conn.query(`
-            SELECT * FROM invoice_terms
-            WHERE invoice_id = ?
-              AND term_number = ?
-        `, [invoice_id, term_number]);
+        /* GET CLIENT USER_ID */
+        const [[{ user_id }]] = await conn.query(
+            "SELECT user_id FROM client WHERE id = ?",
+            [invoice.client_id]
+        );
 
-        if (!term) {
-            return res.status(404).json({
-                message: "Termin tidak ditemukan"
-            });
-        }
-
-        if (term.term_status === "paid") {
+        /* CEK STATUS INVOICE */
+        if (!["Issued", "Partially Paid", "Overdue"].includes(invoice.status)) {
             return res.status(400).json({
-                message: "Termin sudah dibayar"
+                message: "Invoice tidak bisa menerima pembayaran"
             });
         }
 
-        /* VALIDASI NOMINAL DULU */
-        if (Number(nominal) !== Number(term.nominal)) {
+        /* CEK TOTAL PEMBAYARAN TIDAK MELEBIHI TOTAL INVOICE */
+        const [[{ paid_amount }]] = await conn.query(`
+            SELECT COALESCE(SUM(amount_paid), 0) AS paid_amount
+            FROM payment
+            WHERE invoice_id = ? AND payment_status = 'paid'
+            `, [invoice_id]);
+
+        // Use rounding to handle floating point precision issues
+        const totalPaid = Math.round((paid_amount + Number(amount_paid)) * 100) / 100;
+        const invoiceTotal = Math.round(invoice.total * 100) / 100;
+
+        if (totalPaid > invoiceTotal) {
             return res.status(400).json({
-                message: "Nominal pembayaran tidak sesuai tagihan"
+                message: "Total pembayaran melebihi jumlah tagihan"
             });
         }
 
-        /* UPDATE TERMIN */
+        /* INSERT PAYMENT */
         await conn.query(`
-            UPDATE invoice_terms
-            SET term_status = 'paid',
-                payment_date = CURDATE()
-            WHERE id = ?
-        `, [term.id]);
+            INSERT INTO payment
+            (invoice_id, payment_date, amount_paid, payment_status, paid_by, paid_at)
+        VALUES(?, ?, ?, 'paid', ?, NOW())
+        `, [invoice_id, payment_date || new Date().toISOString().split('T')[0], amount_paid, user_id]);
 
-        await evaluateInvoiceStatus(invoice_id, conn);
+        // Get username for log
+        const username = await getUsername(conn, user_id);
+
+        // Insert log for payment
+        await conn.query(`
+            INSERT INTO invoice_status_logs
+            (invoice_id, status, description, created_by)
+            VALUES (?, 'Paid', ?, ?)
+        `, [invoice_id, `Payment received`, user_id]);
+
+        await evaluateInvoiceStatus(invoice_id, user_id, conn);
 
         await conn.commit();
         res.json({
-            message: `Termin ${term_number} berhasil dibayar`
+            message: `Pembayaran sebesar ${amount_paid} berhasil`
         });
     } catch (err) {
         await conn.rollback();
         res.status(500).json({ message: err.message });
     } finally {
         conn.release();
+    }
+});
+
+
+/* ======================================================
+   UPDATE INVOICE NUMBER AND TERM CONDITION (ONLY DRAFT)
+====================================================== */
+router.put("/:id/update-draft", async (req, res) => {
+    const { id } = req.params;
+    const { invoice_number, term_condition, updated_by } = req.body;
+
+    if (!invoice_number) {
+        return res.status(400).json({ message: "invoice_number wajib diisi" });
+    }
+
+    const conn = await db.getConnection();
+
+    try {
+        await conn.beginTransaction();
+
+        const [[invoice]] = await conn.query(
+            "SELECT status FROM invoice WHERE id = ?",
+            [id]
+        );
+
+
+        if (!invoice) {
+            await conn.rollback();
+            return res.status(404).json({ message: "Invoice not found" });
+        }
+
+        if (invoice.status !== "Draft") {
+            return res.status(400).json({
+                message: "Hanya invoice draft yang bisa diperbarui!"
+            });
+        }
+
+        await conn.query(
+            "UPDATE invoice SET invoice_number = ?, term_condition = ? WHERE id = ?",
+            [invoice_number, term_condition, id]
+        );
+
+        const username = await getUsername(conn, updated_by)
+
+        await conn.query(`
+            INSERT INTO invoice_status_logs 
+            (invoice_id, status, description, created_by) 
+            VALUES (?, 'Draft', ?, ?)
+        `, [
+            id,
+            `Invoice updated`,
+            updated_by
+        ]);
+
+        await conn.commit();
+        res.json({ message: "Invoice berhasil diupdate!" });
+    } catch (err) {
+        if (conn) await conn.rollback();
+        console.error(err);
+        res.status(500).json({ message: err.message });
+    } finally {
+        if (conn) conn.release();
     }
 });
 
@@ -380,8 +561,9 @@ router.delete("/:id", async (req, res) => {
         }
 
         await conn.query("DELETE FROM invoice_items WHERE invoice_id = ?", [id]);
-        await conn.query("DELETE FROM invoice_terms WHERE invoice_id = ?", [id]);
+        await conn.query("DELETE FROM invoice_status_logs WHERE invoice_id = ?", [id]);
         await conn.query("DELETE FROM invoice WHERE id = ?", [id]);
+
 
         await conn.commit();
         res.json({ message: "Invoice draft berhasil dihapus" });

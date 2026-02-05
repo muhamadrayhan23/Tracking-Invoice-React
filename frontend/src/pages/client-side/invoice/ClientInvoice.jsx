@@ -18,6 +18,11 @@ const ClientInvoice = () => {
         fetchInvoices();
     }, []);
 
+    const handleFetchError = (err) => {
+        console.error("Error fetching invoices:", err);
+        setError(err.message || "Failed to load invoices");
+    };
+
     const formatDate = (dateString) => {
         if (!dateString) return '';
         const date = new Date(dateString);
@@ -30,7 +35,7 @@ const ClientInvoice = () => {
 
     const filteredInvoices = invoices.filter((inv) =>
         (inv.invoice_number || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (inv.total || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (inv.total || '').toString().toLowerCase().includes(searchTerm.toLowerCase()) ||
         (inv.status || '').toLowerCase().includes(searchTerm.toLowerCase())
     );
 
@@ -48,10 +53,14 @@ const ClientInvoice = () => {
     const fetchInvoices = async () => {
         try {
             setLoading(true);
+            setError(null);
             const data = await getClientInvoices();
-            setInvoices(data || []);
+            // Handle both direct array and nested response object
+            const invoiceList = Array.isArray(data) ? data : data?.data || data?.invoices || [];
+            setInvoices(invoiceList);
         } catch (err) {
-            setError(err.message || "Failed to load invoices");
+            handleFetchError(err);
+            setInvoices([]);
         } finally {
             setLoading(false);
         }
@@ -106,6 +115,7 @@ const ClientInvoice = () => {
                                 <thead>
                                     <tr className="text-sm border-b border-gray-200 bg-[#FAFAFA]">
                                         <th className="py-3">Invoice Number</th>
+                                        <th>Quotation</th>
                                         <th>Issue Date</th>
                                         <th>Due Date</th>
                                         <th>Total</th>
@@ -114,9 +124,10 @@ const ClientInvoice = () => {
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {paginatedInvoices.map((inv) => (
+                                    {paginatedInvoices && paginatedInvoices.length > 0 ? paginatedInvoices.map((inv) => (
                                         <tr key={inv.id} className="border-b border-gray-200">
                                             <td>{inv.invoice_number}</td>
+                                            <td>{inv.quotation_number || '-'}</td>
                                             <td>{formatDate(inv.issue_date)}</td>
                                             <td>{formatDate(inv.due_date)}</td>
                                             <td>Rp {Number(inv.total).toLocaleString("id-ID")}</td>
@@ -136,7 +147,11 @@ const ClientInvoice = () => {
                                                 </button>
                                             </td>
                                         </tr>
-                                    ))}
+                                    )) : (
+                                        <tr>
+                                            <td colSpan="7" className="text-center text-gray-500 py-4">No invoices available</td>
+                                        </tr>
+                                    )}
                                 </tbody>
                             </table>
                             <div className="flex justify-between items-center mt-4">
@@ -162,12 +177,6 @@ const ClientInvoice = () => {
                                     </button>
                                 </div>
                             </div>
-
-                            {filteredInvoices.length === 0 && (
-                                <div className="text-center text-gray-500 mt-4 w-full">
-                                    Invoices Not Available
-                                </div>
-                            )}
                         </div>
                     )}
                 </div>

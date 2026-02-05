@@ -1,18 +1,26 @@
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import QuotationLayout from "../../components/layout/Quotation-Layout";
 import { Link, useNavigate } from "react-router-dom";
-import { X, Eye, Edit, Trash2, Search, ReceiptText, DollarSign, Building2, CalendarCheck, CalendarClock, Info, FolderOpen, FileText } from "lucide-react";
+import { Eye, Edit, Trash2, Search, Send, CheckCircle, XCircle, X } from "lucide-react";
 
 const Quotation = () => {
     const [quotations, setQuotations] = useState([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
     const [showDetail, setShowDetail] = useState(false);
-    const [selectedQuotation, setSelectedQuotation] = useState(null);
     const [searchTerm, setSearchTerm] = useState("");
-    const ITEMS_PER_PAGE = 5;
+    const ITEMS_PER_PAGE = 10;
     const [currentPage, setCurrentPage] = useState(1);
+    const [showAlert, setShowAlert] = useState(false);
+    const [alertMessage, setAlertMessage] = useState("");
+    const [alertType, setAlertType] = useState("success");
+
+    // Confirm popup states
+    const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+    const [showSendConfirm, setShowSendConfirm] = useState(false);
+    const [quotationToDelete, setQuotationToDelete] = useState(null);
+    const [quotationToSend, setQuotationToSend] = useState(null);
 
     const navigate = useNavigate();
 
@@ -63,72 +71,121 @@ const Quotation = () => {
         setCurrentPage(1);
     }, [searchTerm]);
 
+    useEffect(() => {
+        const handleKeyDown = (e) => {
+            if (showDeleteConfirm) {
+                if (e.key === "Enter") {
+                    e.preventDefault();
+                    handleConfirmDelete();
+                } else if (e.key === "Escape") {
+                    setShowDeleteConfirm(false);
+                    setQuotationToDelete(null);
+                }
+            } else if (showSendConfirm) {
+                if (e.key === "Enter") {
+                    e.preventDefault();
+                    handleConfirmSend();
+                } else if (e.key === "Escape") {
+                    setShowSendConfirm(false);
+                    setQuotationToSend(null);
+                }
+            } else if (showAlert) {
+                if (e.key === "Enter" || e.key === "Escape") {
+                    e.preventDefault();
+                    handleCloseAlert();
+                }
+            }
+        };
+        window.addEventListener("keydown", handleKeyDown);
+        return () => window.removeEventListener("keydown", handleKeyDown);
+    }, [showDeleteConfirm, showSendConfirm, showAlert]);
 
-    const handleDelete = async (id) => {
-        if (!confirm("Yakin ingin menghapus quotation ini?")) return;
+    const handleCloseAlert = () => {
+        setShowAlert(false);
+        setAlertMessage("");
+    };
+
+    const handleConfirmDelete = async () => {
+        if (!quotationToDelete) return;
 
         try {
-            const res = await fetch(`http://localhost:3000/api/quotations/${id}`, {
+            const res = await fetch(`http://localhost:3000/api/quotations/${quotationToDelete}`, {
                 method: "DELETE",
             });
 
-            alert("Quotation berhasil dihapus!");
+            if (!res.ok) throw new Error("Failed to Delete Quotation");
 
-            if (!res.ok) throw new Error("Failed to delete");
-
+            setAlertMessage("Quotation successfully deleted!");
+            setAlertType("success");
+            setShowAlert(true);
             fetchQuotations();
         } catch (err) {
-            alert(err.message);
+            setAlertMessage(err.message);
+            setAlertType("error");
+            setShowAlert(true);
+        } finally {
+            setShowDeleteConfirm(false);
+            setQuotationToDelete(null);
         }
     };
 
-    const handleSend = async (id) => {
-        if (!confirm("Yakin ingin mengirim quotation ini?")) return;
+    const handleConfirmSend = async () => {
+        if (!quotationToSend) return;
+
+        const storedUser = JSON.parse(localStorage.getItem("user") || "{}");
+        const userId = storedUser.id;
+
+        if (!userId) {
+            setAlertMessage("Sesi berakhir, silakan login kembali.");
+            setAlertType("error");
+            setShowAlert(true);
+            setShowSendConfirm(false);
+            setQuotationToSend(null);
+            return;
+        }
 
         try {
-            const res = await fetch(`http://localhost:3000/api/quotations/${id}/publish`, {
+            const res = await fetch(`http://localhost:3000/api/quotations/${quotationToSend}/publish`, {
                 method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ sent_by: userId }),
             });
-
-            if (!res.ok) throw new Error("Failed to publish");
-
-            alert("Quotation berhasil dikirim!");
-
-            fetchQuotations();
-        } catch (err) {
-            alert(err.message);
-        }
-    };
-
-    const handleConvertToInvoice = async (id) => {
-        if (!confirm("Yakin ingin mengkonversi quotation ini ke invoice?")) return;
-
-
-        try {
-            const res = await fetch(`http://localhost:3000/api/quotations/${id}/convert-to-invoice`, {
-                method: "POST",
-            });
-
-            alert("Quotation berhasil di convert ke Invoice");
-
-            if (!res.ok) throw new Error("Failed to convert");
 
             const data = await res.json();
+            if (!res.ok) throw new Error(data.message || "Failed to send");
 
+            setAlertMessage("Quotation successfully sent!");
+            setAlertType("success");
+            setShowAlert(true);
             fetchQuotations();
         } catch (err) {
-            alert(err.message);
+            setAlertMessage(err.message);
+            setAlertType("error");
+            setShowAlert(true);
+        } finally {
+            setShowSendConfirm(false);
+            setQuotationToSend(null);
         }
+    };
+
+    const handleDelete = (id) => {
+        setQuotationToDelete(id);
+        setShowDeleteConfirm(true);
+    };
+
+    const handleSend = (id) => {
+        setQuotationToSend(id);
+        setShowSendConfirm(true);
     };
 
     return (
         <QuotationLayout>
             <div className="m-3 flex flex-col gap-3">
-                <div className="flex items-center justify-between mb-2.5 border-b border-gray-200">
+                <div className="flex items-center justify-between mb-2.5">
                     <h1 className="text-2xl font-semibold pb-4">Quotation</h1>
                     <Link
                         to="/quotations/new"
-                        className="bg-blue-600 text-white px-4 py-2 rounded"
+                        className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
                     >
                         + Create New Quotation
                     </Link>
@@ -157,9 +214,11 @@ const Quotation = () => {
                         <div className="overflow-x-auto">
                             <table className="w-full text-center">
                                 <thead>
-                                    <tr className="text-sm text-gray-600 border-b border-gray-200 bg-[#FAFAFA]">
-                                        <th className="py-3">Company</th>
-                                        <th>Estimate Date</th>
+                                    <tr className="text-sm border-b border-gray-200 bg-[#FAFAFA]">
+                                        <th>Quotation Number</th>
+                                        <th className="py-3">Client</th>
+                                        <th>Project</th>
+                                        <th>Quotation Date</th>
                                         <th>Expiry Date</th>
                                         <th>Status</th>
                                         <th>Actions</th>
@@ -168,26 +227,26 @@ const Quotation = () => {
                                 <tbody>
                                     {paginatedQuotations.map((q) => (
                                         <tr key={q.id} className="border-b border-gray-200">
+                                            <td>{q.quotation_number}</td>
                                             <td className="py-4">{q.company_name}</td>
+                                            <td>{q.project_title}</td>
                                             <td>{formatDate(q.estimate_date)}</td>
                                             <td>{formatDate(q.expiry_date)}</td>
                                             <td>
-                                                <span className={`px-2 py-1 rounded-full text-xs ${q.status === 'draft' ? 'text-gray-600 bg-gray-50' :
-                                                    q.status === 'sent' ? 'text-blue-600 bg-blue-50' :
-                                                        q.status === 'revised' ? 'text-yellow-600 bg-yellow-50' :
-                                                            q.status === 'rejected' ? 'text-red-600 bg-red-50' :
-                                                                q.status === 'approved' ? 'text-green-600 bg-green-50' :
-                                                                    'text-gray-600 bg-gray-50'
+                                                <span className={`px-2 py-1 rounded-full text-xs ${q.status === 'Draft' ? 'text-gray-500 bg-gray-50' :
+                                                    q.status === 'Sent' ? 'text-blue-500 bg-blue-50' :
+                                                        q.status === 'Revised' ? 'text-yellow-500 bg-yellow-50' :
+                                                            q.status === 'Rejected' ? 'text-red-500 bg-red-50' :
+                                                                q.status === 'Approved' ? 'text-green-500 bg-green-50' :
+                                                                    q.status === 'Expired' ? 'text-red-600 bg-red-50' :
+                                                                        'text-gray-600 bg-gray-50'
                                                     }`}>
                                                     {q.status}
                                                 </span>
                                             </td>
                                             <td className=" gap-2 items-center p-1">
                                                 <button
-                                                    onClick={() => {
-                                                        setSelectedQuotation(q);
-                                                        setShowDetail(true);
-                                                    }}
+                                                    onClick={() => navigate(`/quotations/${q.id}`)}
                                                     className="p-1 hover:bg-gray-100 rounded"
                                                 >
                                                     <Eye size={16} />
@@ -197,8 +256,8 @@ const Quotation = () => {
                                                     onClick={() =>
                                                         navigate(`/quotations/edit/${q.id}`)
                                                     }
-                                                    disabled={q.status === 'sent' || q.status === 'approved'}
-                                                    className={`p-1 rounded text-indigo-600 ${q.status === 'sent' || q.status === 'approved'
+                                                    disabled={q.status === 'Sent' || q.status === 'Approved' || q.status === 'Revised'}
+                                                    className={`p-1 rounded text-indigo-600 ${q.status === 'Sent' || q.status === 'Approved' || q.status === 'Revised'
                                                         ? 'opacity-50 cursor-not-allowed'
                                                         : 'hover:bg-gray-100'
                                                         }`}
@@ -209,8 +268,8 @@ const Quotation = () => {
                                                 {/* Button Edit Quotation (Draft or Revised Only) */}
                                                 <button
                                                     onClick={() => handleDelete(q.id)}
-                                                    disabled={q.status === 'sent' || q.status === 'approved'}
-                                                    className={`p-1 rounded text-red-600 ${q.status === 'sent' || q.status === 'approved'
+                                                    disabled={q.status === 'Sent' || q.status === 'Approved' || q.status === 'Revised'}
+                                                    className={`p-1 rounded text-red-600 ${q.status === 'Sent' || q.status === 'Approved' || q.status === 'Revised'
                                                         ? 'opacity-50 cursor-not-allowed'
                                                         : 'hover:bg-gray-100'
                                                         }`}
@@ -219,22 +278,12 @@ const Quotation = () => {
                                                 </button>
 
                                                 {/* Button Send Quotation (Draft or Revised Only) */}
-                                                {(q.status === 'draft' || q.status === 'revised') && (
+                                                {(q.status === 'Draft' || q.status === 'Revised') && (
                                                     <button
                                                         onClick={() => handleSend(q.id)}
                                                         className="p-1 hover:bg-gray-100 rounded text-blue-600"
                                                     >
-                                                        <FileText size={16} />
-                                                    </button>
-                                                )}
-
-                                                {/* Button Convert to Invoice (Approve Only) */}
-                                                {q.status === 'approved' && (
-                                                    <button
-                                                        onClick={() => handleConvertToInvoice(q.id)}
-                                                        className="p-1 hover:bg-gray-100 rounded text-green-600"
-                                                    >
-                                                        <FileText size={16} />
+                                                        <Send size={16} />
                                                     </button>
                                                 )}
                                             </td>
@@ -272,104 +321,137 @@ const Quotation = () => {
                                 </div>
                             )}
                         </div>
+
                     )}
                 </div>
-
-                {/* MODAL DETAIL */}
-
-                {showDetail && selectedQuotation && (
-                    <div className=" fixed inset-0 z-50 flex items-center justify-center">
+                {/* ALERT MODAL */}
+                {showAlert && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center">
                         {/* Backdrop */}
                         <div
                             className="absolute inset-0 bg-black/40"
-                            onClick={() => setShowDetail(false)}
+                            onClick={handleCloseAlert}
                         />
 
                         {/* Modal */}
-                        <div className="relative bg-white rounded-2xl w-full max-w-lg mx-4 z-50 shadow-xl">
+                        <div className="relative bg-white rounded-2xl w-full max-w-md mx-4 z-50 shadow-xl">
                             {/* Header */}
-                            <div className="flex items-center justify-between px-6 py-4 border-b">
+                            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
                                 <div className="flex items-center gap-3">
-                                    <div className="w-10 h-10 flex items-center justify-center rounded-full bg-blue-100 text-blue-600">
-                                        <ReceiptText size={20} />
+                                    <div className={`w-10 h-10 flex items-center justify-center rounded-full ${alertType === 'success' ? 'bg-green-100 text-green-600' : 'bg-red-100 text-red-600'}`}>
+                                        {alertType === 'success' ? <CheckCircle size={16} /> : <XCircle size={16} />}
                                     </div>
-                                    <h3 className="text-lg font-semibold">Quotation Details</h3>
+                                    <h3 className="text-lg font-semibold">
+                                        {alertType === 'success' ? 'Success' : 'Error'}
+                                    </h3>
                                 </div>
-
-                                <button
-                                    onClick={() => setShowDetail(false)}
-                                    className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-100"
-                                >
-                                    <X size={18} />
-                                </button>
                             </div>
 
-                            {/* Content */}
-                            <div className="px-6 py-5 space-y-5">
-                                {/* Company */}
-                                <div>
-                                    <div className="flex items-center gap-2 text-sm text-gray-500 mb-2">
-                                        <Building2 size={16} />
-                                        <span>Company</span>
-                                    </div>
-                                    <div className="border rounded-lg px-4 py-3 bg-gray-50">
-                                        {selectedQuotation.company_name}
-                                    </div>
+                            <div className="px-6 py-5">
+                                <p className="text-gray-700">{alertMessage}</p>
+                                <div className="flex justify-end mt-6">
+                                    <button
+                                        onClick={handleCloseAlert}
+                                        className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                                    >
+                                        OK
+                                    </button>
                                 </div>
+                            </div>
+                        </div>
+                    </div>
+                )}
 
-                                {/* Estimate Date */}
-                                <div>
-                                    <div className="flex items-center gap-2 text-sm text-gray-500 mb-2">
-                                        <CalendarCheck size={16} />
-                                        <span>Estimate Date</span>
+                {/* DELETE CONFIRMATION MODAL */}
+                {showDeleteConfirm && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center">
+                        {/* Backdrop */}
+                        <div
+                            className="absolute inset-0 bg-black/40"
+                            onClick={() => {
+                                setShowDeleteConfirm(false);
+                                setQuotationToDelete(null);
+                            }}
+                        />
+
+                        {/* Modal */}
+                        <div className="relative bg-white rounded-2xl w-full max-w-md mx-4 z-50 shadow-xl">
+                            {/* Header */}
+                            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
+                                <div className="flex items-center gap-3">
+                                    <div className="w-10 h-10 flex items-center justify-center rounded-full bg-red-100 text-red-600">
+                                        <Trash2 size={16} />
                                     </div>
-                                    <div className="border rounded-lg px-4 py-3 bg-gray-50">
-                                        {formatDate(selectedQuotation.estimate_date)}
-                                    </div>
+                                    <h3 className="text-lg font-semibold">Confirm Delete</h3>
                                 </div>
+                            </div>
 
-                                {/* Expiry Date */}
-                                <div>
-                                    <div className="flex items-center gap-2 text-sm text-gray-500 mb-2">
-                                        <CalendarClock size={16} />
-                                        <span>Expiry Date</span>
-                                    </div>
-                                    <div className="border rounded-lg px-4 py-3 bg-gray-50">
-                                        {formatDate(selectedQuotation.expiry_date)}
-                                    </div>
+                            <div className="px-6 py-5">
+                                <p className="text-gray-700">Are you sure want to delete this quotation?</p>
+                                <div className="flex justify-end gap-3 mt-6">
+                                    <button
+                                        onClick={handleConfirmDelete}
+                                        className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700"
+                                    >
+                                        Delete
+                                    </button>
+                                    <button
+                                        onClick={() => {
+                                            setShowDeleteConfirm(false);
+                                            setQuotationToDelete(null);
+                                        }}
+                                        className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
+                                    >
+                                        Cancel
+                                    </button>
                                 </div>
+                            </div>
+                        </div>
+                    </div>
+                )}
 
-                                {/* Project Title */}
-                                <div>
-                                    <div className="flex items-center gap-2 text-sm text-gray-500 mb-2">
-                                        <FolderOpen size={16} />
-                                        <span>Project Title</span>
+                {/* SEND CONFIRMATION MODAL */}
+                {showSendConfirm && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center">
+                        {/* Backdrop */}
+                        <div
+                            className="absolute inset-0 bg-black/40"
+                            onClick={() => {
+                                setShowSendConfirm(false);
+                                setQuotationToSend(null);
+                            }}
+                        />
+
+                        {/* Modal */}
+                        <div className="relative bg-white rounded-2xl w-full max-w-md mx-4 z-50 shadow-xl">
+                            {/* Header */}
+                            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
+                                <div className="flex items-center gap-3">
+                                    <div className="w-10 h-10 flex items-center justify-center rounded-full bg-blue-100 text-blue-600">
+                                        <Send size={16} />
                                     </div>
-                                    <div className="border rounded-lg px-4 py-3 bg-gray-50">
-                                        {selectedQuotation.project_title}
-                                    </div>
+                                    <h3 className="text-lg font-semibold">Confirm Send</h3>
                                 </div>
+                            </div>
 
-                                {/* Status */}
-                                <div>
-                                    <div className="flex items-center gap-2 text-sm text-gray-500 mb-2">
-                                        <Info size={16} />
-                                        <span>Status</span>
-                                    </div>
-                                    <div className="border rounded-lg px-4 py-3 bg-gray-50">
-                                        {selectedQuotation.status}
-                                    </div>
-                                </div>
-
-                                {/* Total */}
-                                <div>
-                                    <div className="flex items-center gap-2 text-sm text-gray-500 mb-2">
-                                        <DollarSign size={16} />
-                                        <span>Total</span>
-                                    </div>
-                                    <div className="border rounded-lg px-4 py-3 bg-gray-50">
-                                        {Number(selectedQuotation.total).toLocaleString("id-ID")}
-                                    </div>
+                            <div className="px-6 py-5">
+                                <p className="text-gray-700">Are you sure want to send this quotation?</p>
+                                <div className="flex justify-end gap-3 mt-6">
+                                    <button
+                                        onClick={handleConfirmSend}
+                                        className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                                    >
+                                        Send
+                                    </button>
+                                    <button
+                                        onClick={() => {
+                                            setShowSendConfirm(false);
+                                            setQuotationToSend(null);
+                                        }}
+                                        className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
+                                    >
+                                        Cancel
+                                    </button>
                                 </div>
                             </div>
                         </div>

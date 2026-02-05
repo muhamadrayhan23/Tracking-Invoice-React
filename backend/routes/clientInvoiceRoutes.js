@@ -7,96 +7,25 @@ router.get("/:id", async (req, res) => {
     const { id } = req.params;
 
     try {
-
         const [[client]] = await db.query(
             "SELECT id FROM client WHERE user_id = ?",
             [id]
         );
 
         if (!client) {
-            return res.status(404).json({ message: "Client tidak ditemukan" });
+            return res.json({ data: [] });
         }
 
-
-        const [invoiceRows] = await db.query(`
-            SELECT
-                i.id,
-                i.invoice_number,
-                i.issue_date,
-                i.due_date,
-                i.subtotal,
-                i.discount,
-                i.tax,
-                i.total,
-                i.status,
-                i.created_at,
-                q.project_title,
-                ii.id as item_id,
-                ii.description,
-                ii.qty as quantity,
-                ii.price as unit_price,
-                ii.total as item_total,
-                it.id as term_id,
-                it.term_number,
-                it.nominal,
-                it.term_percentage,
-                it.term_status,
-                it.term_estimate,
-                it.payment_date
+        const [rows] = await db.query(`
+            SELECT i.*, c.company_name, q.quotation_number
             FROM invoice i
+            JOIN client c ON i.client_id = c.id
             LEFT JOIN quotation q ON i.quotation_id = q.id
-            LEFT JOIN invoice_items ii ON i.id = ii.invoice_id
-            LEFT JOIN item ON ii.item_id = item.id
-            LEFT JOIN invoice_terms it ON i.id = it.invoice_id
             WHERE i.client_id = ? AND i.status != 'Draft'
-            ORDER BY i.created_at DESC, ii.id, it.term_number
+            ORDER BY i.created_at DESC
         `, [client.id]);
 
-        // Group the data by invoice
-        const invoices = {};
-        invoiceRows.forEach(row => {
-            const invoiceId = row.id;
-            if (!invoices[invoiceId]) {
-                invoices[invoiceId] = {
-                    id: row.id,
-                    invoice_number: row.invoice_number,
-                    issue_date: row.issue_date,
-                    due_date: row.due_date,
-                    subtotal: row.subtotal,
-                    discount: row.discount,
-                    tax: row.tax,
-                    total: row.total,
-                    status: row.status,
-                    created_at: row.created_at,
-                    project_title: row.project_title,
-                    items: [],
-                    terms: []
-                };
-            }
-            if (row.item_id && !invoices[invoiceId].items.find(item => item.id === row.item_id)) {
-                invoices[invoiceId].items.push({
-                    id: row.item_id,
-                    item_name: row.item_name,
-                    description: row.description,
-                    quantity: row.quantity,
-                    unit_price: row.unit_price,
-                    total: row.item_total
-                });
-            }
-            if (row.term_id && !invoices[invoiceId].terms.find(term => term.id === row.term_id)) {
-                invoices[invoiceId].terms.push({
-                    id: row.term_id,
-                    term_number: row.term_number,
-                    nominal: row.nominal,
-                    term_percentage: row.term_percentage,
-                    term_status: row.term_status,
-                    term_estimate: row.term_estimate,
-                    payment_date: row.payment_date
-                });
-            }
-        });
-
-        res.json(Object.values(invoices));
+        res.json({ data: rows });
     } catch (err) {
         console.error(err);
         res.status(500).json({ message: err.message });
@@ -109,7 +38,7 @@ router.get("/:userId/:invoiceId", async (req, res) => {
 
     try {
         const [[client]] = await db.query(
-            "SELECT id FROM client WHERE user_id = ?",
+            "SELECT id, company_name, address, pic_name, contact FROM client WHERE user_id = ?",
             [userId]
         );
 
@@ -117,84 +46,98 @@ router.get("/:userId/:invoiceId", async (req, res) => {
             return res.status(404).json({ message: "Client tidak ditemukan" });
         }
 
-        const [invoiceRows] = await db.query(`
-            SELECT
-                i.id,
-                i.invoice_number,
-                i.issue_date,
-                i.due_date,
-                i.subtotal,
-                i.discount,
-                i.tax,
-                i.total,
-                i.status,
-                i.created_at,
-                q.project_title,
-                ii.id as item_id,
-                ii.description,
-                ii.qty as quantity,
-                ii.price as unit_price,
-                ii.total as item_total,
-                it.id as term_id,
-                it.term_number,
-                it.nominal,
-                it.term_percentage,
-                it.term_status,
-                it.term_estimate,
-                it.payment_date
+        const [[invoice]] = await db.query(`
+            SELECT i.*, i.term_condition, c.company_name, c.address, c.pic_name, c.contact, p.project_title, p.start_date, p.end_date
             FROM invoice i
-            LEFT JOIN quotation q ON i.quotation_id = q.id
-            LEFT JOIN invoice_items ii ON i.id = ii.invoice_id
-            LEFT JOIN item ON ii.item_id = item.id
-            LEFT JOIN invoice_terms it ON i.id = it.invoice_id
+            JOIN client c ON i.client_id = c.id
+            JOIN quotation q ON i.quotation_id = q.id
+            LEFT JOIN project p ON q.project_id = p.id
             WHERE i.id = ? AND i.client_id = ? AND i.status != 'Draft'
         `, [invoiceId, client.id]);
 
-        if (invoiceRows.length === 0) {
+        if (!invoice) {
             return res.status(404).json({ message: "Invoice tidak ditemukan" });
         }
 
-        // Group the data by invoice (should be only one)
-        const invoice = {
-            id: invoiceRows[0].id,
-            invoice_number: invoiceRows[0].invoice_number,
-            issue_date: invoiceRows[0].issue_date,
-            due_date: invoiceRows[0].due_date,
-            subtotal: invoiceRows[0].subtotal,
-            discount: invoiceRows[0].discount,
-            tax: invoiceRows[0].tax,
-            total: invoiceRows[0].total,
-            status: invoiceRows[0].status,
-            created_at: invoiceRows[0].created_at,
-            project_title: invoiceRows[0].project_title,
-            items: [],
-            terms: []
-        };
+        const [items] = await db.query(
+            "SELECT * FROM invoice_items WHERE invoice_id = ?",
+            [invoiceId]
+        );
 
-        invoiceRows.forEach(row => {
-            if (row.item_id && !invoice.items.find(item => item.id === row.item_id)) {
-                invoice.items.push({
-                    id: row.item_id,
-                    description: row.description,
-                    quantity: row.quantity,
-                    unit_price: row.unit_price,
-                    total: row.item_total
-                });
+        const [terms] = await db.query(
+            "SELECT * FROM quotation_terms WHERE id = ?",
+            [invoice.quotation_term_id]
+        );
+
+        const [payments] = await db.query(
+            "SELECT * FROM payment WHERE invoice_id = ? ORDER BY payment_date",
+            [invoiceId]
+        );
+
+        // Add payment_date and payment_status to each term
+        const termsWithPayments = terms.map(term => {
+            const termPayments = payments.filter(p => p.quotation_term_id === term.id);
+            if (termPayments.length > 0) {
+                term.payment_date = termPayments[0].payment_date;
+                term.payment_status = termPayments[0].payment_status;
+            } else {
+                term.payment_date = null;
+                term.payment_status = 'unpaid';
             }
-            if (row.term_id && !invoice.terms.find(term => term.id === row.term_id)) {
-                invoice.terms.push({
-                    id: row.term_id,
-                    term_number: row.term_number,
-                    nominal: row.nominal,
-                    term_percentage: row.term_percentage,
-                    term_status: row.term_status,
-                    term_estimate: row.term_estimate,
-                    payment_date: row.payment_date
-                });
-            }
+            return term;
         });
 
-        res.json(invoice);
+        // Calculate subtotal as sum of item totals
+        const subtotal = items.reduce((sum, item) => sum + Number(item.total), 0);
+        let discount = Number(invoice.discount) || 0;
+        let tax = Number(invoice.tax) || 0;
+
+        // Convert discount and tax to absolute values for display if they are percent
+        if (invoice.discount_type === 'percent' && subtotal > 0) {
+            discount = (subtotal * discount) / 100;
+        }
+        if (invoice.tax_type === 'percent' && subtotal > 0) {
+            tax = (subtotal * tax) / 100;
+        }
+
+        const total = Number(termsWithPayments[0].nominal);
+
+        // Convert back to percent for display if they are percent type (matching admin side)
+        if (invoice.discount_type === 'percent' && subtotal > 0) {
+            discount = (discount / subtotal) * 100;
+        }
+        if (invoice.tax_type === 'percent' && subtotal > 0) {
+            tax = (tax / subtotal) * 100;
+        }
+
+        const paidAmount = payments
+            .filter(p => p.payment_status === 'paid')
+            .reduce((sum, p) => sum + Number(p.amount_paid), 0);
+        const remainingAmount = total - paidAmount;
+
+        res.json({
+            client: {
+                id: client.id,
+                company_name: client.company_name,
+                address: client.address,
+                phone: client.phone,
+                email: client.email
+            },
+            invoice,
+            items,
+            summary: {
+                subtotal,
+                discount,
+                discount_type: invoice.discount_type,
+                tax,
+                tax_type: invoice.tax_type,
+                total,
+                paid_amount: paidAmount,
+                remaining_amount: remainingAmount
+            },
+            terms: termsWithPayments,
+            payments
+        });
     } catch (err) {
         console.error(err);
         res.status(500).json({ message: err.message });
